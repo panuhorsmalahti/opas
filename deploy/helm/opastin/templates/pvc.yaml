@@ -5,6 +5,9 @@ metadata:
   name: {{ include "opastin.modelsClaim" . }}
   labels:
     {{- include "opastin.labels" . | nindent 4 }}
+  annotations:
+    # Downloaded models are large; keep them when the release is uninstalled.
+    helm.sh/resource-policy: keep
 spec:
   accessModes:
     {{- toYaml .Values.models.persistence.accessModes | nindent 4 }}

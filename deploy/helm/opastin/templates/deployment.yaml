@@ -24,6 +24,9 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "opastin.serviceAccountName" . }}
+      {{- with .Values.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -85,7 +88,13 @@ spec:
             periodSeconds: 5
             failureThreshold: 120
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- $res := deepCopy .Values.resources }}
+            {{- if .Values.gpu.enabled }}
+            {{- $limits := default dict $res.limits }}
+            {{- $_ := set $limits .Values.gpu.resource (.Values.gpu.count | toString) }}
+            {{- $_ := set $res "limits" $limits }}
+            {{- end }}
+            {{- toYaml $res | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:

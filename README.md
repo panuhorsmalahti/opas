@@ -205,6 +205,11 @@ cross-check the Rust encoder; see its README.
 
 ## Deployment
 
+Step-by-step guides live in [docs/usage](docs/README.md): [HTTP API](docs/usage/api.md),
+[Rust SDK](docs/usage/sdk.md), [Docker](docs/usage/docker.md),
+[Kubernetes](docs/usage/kubernetes.md), [Helm](docs/usage/helm.md) and
+[hardware](docs/usage/hardware.md).
+
 **Docker:**
 
 ```sh
@@ -215,7 +220,16 @@ docker run -p 8080:8080 -e ANTHROPIC_API_KEY \
 
 The image contains `opastin` and `opastin-encode`. For the probe router, mount the model
 and probe files (e.g. `-v $PWD/models:/models:ro`) and use `/models/...` paths in the
-config. The image's llama.cpp build runs on CPU.
+config.
+
+**CPU or GPU:**
+
+- The default image runs the encoder on CPU, which adds seconds per routed request for
+  the 9B model.
+- `Dockerfile.cuda` builds an NVIDIA GPU image.
+- On Apple Silicon, run the binary natively, since containers can't use Metal.
+
+Measurements and options: [docs/usage/hardware.md](docs/usage/hardware.md).
 
 **Kubernetes:**
 

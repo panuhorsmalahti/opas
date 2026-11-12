@@ -1,7 +1,8 @@
 # opastin: LLM router.
 #
 # Builds the `opastin` server (with the activation-probe router, which links llama.cpp
-# for CPU) and the `opastin-encode` tool. Model weights and probe files are not baked
+# for CPU) and the `opastin-encode` tool. For NVIDIA GPUs use Dockerfile.cuda; see
+# docs/usage/docker.md for hardware guidance. Model weights and probe files are not baked
 # into the image: mount them (e.g. at /models) and point the config at them.
 #
 #   docker build -t opastin .
@@ -18,6 +19,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 
+# llama.cpp only uses the CPU instruction sets Rust's target-cpu enables. Without one, x86
+# builds fall back to baseline SSE and run several times slower. Default for amd64:
+# x86-64-v3 (AVX2/FMA, Intel Haswell / AMD Zen and newer). Use TARGET_CPU=native when the
+# image is built on the machine it runs on, or x86-64-v4 for AVX-512 servers.
+ARG TARGETARCH
+ARG TARGET_CPU=""
+RUN cpu="$TARGET_CPU"; \
+    if [ -z "$cpu" ] && [ "$TARGETARCH" = "amd64" ]; then cpu=x86-64-v3; fi; \
+    if [ -n "$cpu" ]; then echo "-C target-cpu=$cpu" > /tmp/rustflags; else : > /tmp/rustflags; fi
+
 # Build dependencies first so source edits don't rebuild llama.cpp.
 COPY Cargo.toml Cargo.lock ./
 COPY crates/opastin/Cargo.toml crates/opastin/Cargo.toml
@@ -30,13 +41,13 @@ RUN for c in opastin opastin-server opastin-encoder; do \
     && echo 'fn main() {}' > crates/opastin-encoder/src/bin/encode.rs \
     && for e in decide gateway; do echo 'fn main() {}' > crates/opastin/examples/$e.rs; done \
     && echo 'fn main() {}' > crates/opastin-encoder/examples/overhead.rs \
-    && cargo build --release -p opastin-server -p opastin-encoder \
+    && RUSTFLAGS="$(cat /tmp/rustflags)" cargo build --release -p opastin-server -p opastin-encoder \
     && rm -rf crates
 
 COPY crates crates
 # Touch sources so cargo rebuilds the workspace crates over the dependency-only stubs.
 RUN find crates -name '*.rs' -exec touch {} + \
-    && cargo build --release -p opastin-server -p opastin-encoder --locked \
+    && RUSTFLAGS="$(cat /tmp/rustflags)" cargo build --release -p opastin-server -p opastin-encoder --locked \
     && cp target/release/opastin target/release/opastin-encode /usr/local/bin/
 
 FROM debian:${DEBIAN_RELEASE}-slim

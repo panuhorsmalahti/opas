@@ -110,6 +110,17 @@ resources:
   limits:
     memory: 512Mi
 
+# GPU scheduling for the probe router's encoder (needs an image built with
+# Dockerfile.cuda and the NVIDIA device plugin on the cluster), e.g.
+#   image.tag: cuda
+#   gpu: {enabled: true, resource: nvidia.com/gpu, count: 1}
+#   nodeSelector: {nvidia.com/gpu.present: "true"}
+gpu:
+  enabled: false
+  resource: nvidia.com/gpu
+  count: 1
+runtimeClassName: ""
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

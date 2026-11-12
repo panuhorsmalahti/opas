@@ -15,6 +15,10 @@ path = "src/main.rs"
 default = ["probe"]
 # Activation-probe router: links llama.cpp (needs cmake to build).
 probe = ["dep:opastin-encoder"]
+# Run the probe router's encoder on a GPU backend.
+cuda = ["probe", "opastin-encoder/cuda"]
+vulkan = ["probe", "opastin-encoder/vulkan"]
+rocm = ["probe", "opastin-encoder/rocm"]
 
 [dependencies]
 opastin = { path = "../opastin", features = ["gateway"] }

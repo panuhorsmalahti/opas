@@ -1,0 +1,49 @@
+# opastin with the probe router's encoder on NVIDIA GPUs (llama.cpp CUDA backend).
+#
+# Untested in this repository's CI (no GPU runners). Requires the NVIDIA Container Toolkit
+# on the host (docker run --gpus all ...) or the NVIDIA device plugin in Kubernetes.
+#
+#   docker build -f Dockerfile.cuda -t opastin:cuda .
+#   docker run --gpus all -p 8080:8080 -v $PWD/models:/models:ro \
+#     -v $PWD/opastin.toml:/etc/opastin/opastin.toml:ro opastin:cuda
+#
+# CUDA_ARCHITECTURES limits the GPU architectures compiled for (faster build, smaller
+# binary), e.g. "89" for L4/RTX 40xx, "90" for H100, "80;86;89;90" for a mix.
+
+ARG CUDA_VERSION=12.6.3
+ARG UBUNTU=ubuntu24.04
+
+FROM nvidia/cuda:${CUDA_VERSION}-devel-${UBUNTU} AS build
+ARG RUST_VERSION=1.94.0
+ARG CUDA_ARCHITECTURES="80;86;89;90"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl build-essential cmake clang libclang-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION}
+# Link against the driver stub at build time; the real libcuda comes from the host.
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
+    CUDAARCHS=${CUDA_ARCHITECTURES}
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates crates
+RUN RUSTFLAGS="-C target-cpu=x86-64-v3" \
+    cargo build --release --locked -p opastin-server -p opastin-encoder \
+        --features opastin-server/cuda,opastin-encoder/cuda \
+    && cp target/release/opastin target/release/opastin-encode /usr/local/bin/
+
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-${UBUNTU}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home /nonexistent --shell /usr/sbin/nologin opastin
+COPY --from=build /usr/local/bin/opastin /usr/local/bin/opastin-encode /usr/local/bin/
+COPY opastin.example.toml /etc/opastin/opastin.toml
+USER opastin
+ENV OPASTIN_CONFIG=/etc/opastin/opastin.toml \
+    OPASTIN_LISTEN=0.0.0.0:8080 \
+    RUST_LOG=info \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/opastin"]
