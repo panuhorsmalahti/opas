@@ -5,7 +5,7 @@ models/
 .venv/
 
 # Extracted activations and probe outputs
-probe/out/
+training/out/
 __pycache__/
 
 # Downloaded datasets (fetched by scripts/, never committed)

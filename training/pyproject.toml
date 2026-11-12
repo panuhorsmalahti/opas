@@ -1,0 +1,14 @@
+[project]
+name = "opastin-training"
+version = "0.1.0"
+description = "Offline tooling for opastin: dataset preparation and probe training (not used at runtime)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=2",
+    "scikit-learn==1.9.1",
+]
+
+[tool.uv]
+package = false
+# Prefer uv-managed Python (a stray x86_64 Python can make uv resolve for the wrong arch).
+python-preference = "only-managed"

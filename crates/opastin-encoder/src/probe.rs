@@ -3,7 +3,7 @@
 //! it will produce. Tiers keep the probe independent of specific model names; the
 //! consumer maps its models to tiers and supplies prices.
 //!
-//! Training (probe/train_probe.py) fits standardize → PCA → logistic / ridge regression.
+//! Training (training/train_probe.py) fits standardize → PCA → logistic / ridge regression.
 //! Every step is linear, so each head is exported collapsed into one weight vector over
 //! the raw hidden state plus a bias:
 //!

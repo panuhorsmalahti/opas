@@ -6,7 +6,7 @@
 # Benchmark and Unified Framework for LLM Routing" (Findings of ACL 2026),
 # code: https://github.com/ynulihao/LLMRouterBench
 #
-# The archive is ~1.3 GB. probe/prepare_llmrouterbench.py then turns it into a compact
+# The archive is ~1.3 GB. training/prepare_llmrouterbench.py then turns it into a compact
 # labels file without extracting the raw model outputs to disk.
 set -euo pipefail
 

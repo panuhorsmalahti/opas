@@ -103,7 +103,7 @@ pub enum RouterConfig {
     Probe {
         /// GGUF encoder model, e.g. `models/gguf/Qwen3.5-9B-Q8_0.gguf`.
         encoder_model: PathBuf,
-        /// Probe weights exported by `probe/train_probe.py`.
+        /// Probe weights exported by `training/train_probe.py`.
         probe: PathBuf,
         /// Success probability traded per USD of expected cost: route to
         /// `argmax p − lambda × (cost + switch_cost)`.
