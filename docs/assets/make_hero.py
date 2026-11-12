@@ -143,8 +143,8 @@ text(x1 + 24, BOT - 18, '"model": "auto"', 13, MUTED, 400, family=MONO)
 
 # --- 2. encoder ------------------------------------------------------------------------
 x2, w2 = 400, 400
-card(x2, TOP, w2, CH, "Encoder prefill", 2)
-text(x2 + 24, TOP + 84, "Qwen3.5-9B · one pass over the prompt", 13.5, FAINT)
+card(x2, TOP, w2, CH, "Open-weight model reads it", 2)
+text(x2 + 24, TOP + 84, "Qwen3.5-9B · one pass over the prompt, no output", 13.5, FAINT)
 rng = random.Random(7)
 n_layers, n_cells = 11, 22
 lx, lw = x2 + 52, 250
@@ -175,7 +175,8 @@ for k, tok in enumerate(["Rewrite", "image", "Rust", "…", "WASM", "&lt;think&g
     tx = lx - 6 + k * 50
     add(f'<rect x="{tx}" y="{ty}" width="46" height="22" rx="6" fill="#0f1733" stroke="{CARD_EDGE}"/>')
     text(tx + 23, ty + 15, tok, 10.5, MUTED, 500, "middle", family=MONO)
-text(x2 + w2 / 2, ty + 56, "residual stream after every layer, read at the last prompt token", 12.5, FAINT, 400, "middle")
+text(x2 + w2 / 2, ty + 50, "its layer activations are the input", 12.5, FAINT, 400, "middle")
+text(x2 + w2 / 2, ty + 69, "to a trained model that suggests the best model", 12.5, FAINT, 400, "middle")
 # hidden-state vector pulled out of L24
 vx, vy = x2 + w2 - 50, hy - 70
 add(f'<rect x="{vx - 6}" y="{vy - 6}" width="30" height="{12 * 15 + 12}" rx="9" fill="#0f1733" stroke="{AMBER}" stroke-opacity="0.7"/>')
@@ -188,8 +189,8 @@ text(vx + 9, vy + 12 * 15 + 30, "4096-d", 11.5, AMBER, 600, "middle", family=MON
 
 # --- 3. probe ----------------------------------------------------------------------------
 x3, w3 = 860, 330
-card(x3, TOP, w3, CH, "Predict every option", 3)
-text(x3 + 24, TOP + 84, "linear probe per tier, microseconds", 13.5, FAINT)
+card(x3, TOP, w3, CH, "Trained predictor", 3)
+text(x3 + 24, TOP + 84, "rates every candidate from the activations", 13.5, FAINT)
 tiers = [("small", 0.58, 1, "2s"), ("medium", 0.79, 2, "6s"), ("large", 0.86, 3, "12s"), ("xlarge", 0.91, 4, "20s")]
 hy0 = TOP + 124
 text(x3 + 24, hy0, "tier", 12, FAINT, 700, extra='letter-spacing="1"')
