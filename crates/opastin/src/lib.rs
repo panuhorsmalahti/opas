@@ -32,9 +32,11 @@ pub mod conversation;
 pub mod gateway;
 pub mod request;
 pub mod router;
+pub mod tier;
 
 pub use api::ApiFormat;
 pub use config::{CacheConfig, Config, ConfigError, ModelConfig, RouterConfig, Upstream};
 pub use conversation::{Conversation, ConversationTracker, Pricing};
 pub use request::{Message, RequestError, RouteRequest};
 pub use router::{Candidate, RandomRouter, Decision, RouteError, Router};
+pub use tier::Tier;

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::ApiFormat;
 use crate::conversation::{ConversationTracker, Pricing};
 use crate::router::{Candidate, RandomRouter, Router};
+use crate::tier::Tier;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -137,12 +138,13 @@ pub struct ModelConfig {
     /// Where to send Anthropic Messages requests for this model.
     #[serde(default)]
     pub anthropic: Option<Upstream>,
-    /// Prices in USD per million tokens, used by cache-aware routing to price a switch.
+    /// Capability tier. The probe router predicts outcomes per tier and needs one.
+    #[serde(default)]
+    pub tier: Option<Tier>,
+    /// Prices in USD per million tokens, for cost estimates and cache-aware routing.
+    /// Defaults to the tier's typical prices.
     #[serde(default)]
     pub pricing: Option<Pricing>,
-    /// Name of the probe head that predicts this model (probe router). Defaults to `id`.
-    #[serde(default)]
-    pub probe_head: Option<String>,
 }
 
 impl ModelConfig {
@@ -245,7 +247,7 @@ impl Config {
         self.models
             .iter()
             .filter(|m| m.upstream(format).is_some())
-            .map(|m| Candidate::new(&m.id).with_pricing(m.pricing))
+            .map(|m| Candidate::new(&m.id).with_tier(m.tier).with_pricing(m.pricing))
             .collect()
     }
 }
@@ -303,7 +305,7 @@ mod tests {
 
             [[models]]
             id = "gpt-5"
-            probe_head = "gpt-5"
+            tier = "large"
             pricing = { input = 1.25, cached_input = 0.125, output = 10.0 }
             openai = { base_url = "u" }
             "#,
@@ -315,6 +317,7 @@ mod tests {
         assert!(c.cache.enabled);
         let cands = c.candidates(ApiFormat::OpenaiChat);
         assert_eq!(cands[0].pricing.unwrap().cached_input, 0.125);
+        assert_eq!(cands[0].tier, Some(Tier::Large));
 
         // Defaults: cache on, 5-minute TTL, random router.
         let d = Config::from_toml_str("[[models]]\nid = \"x\"\nopenai = { base_url = \"u\" }\n").unwrap();

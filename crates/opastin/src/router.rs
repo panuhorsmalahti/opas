@@ -9,20 +9,34 @@ use serde::{Deserialize, Serialize};
 
 use crate::conversation::{Conversation, Pricing};
 use crate::request::RouteRequest;
+use crate::tier::Tier;
 
 /// A model the router may choose.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
     /// Model id as exposed by the router (matches a configured model id).
     pub id: String,
-    /// Prices, if configured; used by cache-aware routing.
+    /// Capability tier, if configured; used by routers that predict outcomes per tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Tier>,
+    /// Prices, if configured; used for cost estimates and cache-aware routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<Pricing>,
 }
 
 impl Candidate {
     pub fn new(id: impl Into<String>) -> Self {
-        Self { id: id.into(), pricing: None }
+        Self { id: id.into(), tier: None, pricing: None }
+    }
+
+    pub fn with_tier(mut self, tier: Option<Tier>) -> Self {
+        self.tier = tier;
+        self
+    }
+
+    /// Configured pricing, or the tier's default pricing.
+    pub fn effective_pricing(&self) -> Option<Pricing> {
+        self.pricing.or_else(|| self.tier.map(Tier::default_pricing))
     }
 
     pub fn with_pricing(mut self, pricing: Option<Pricing>) -> Self {

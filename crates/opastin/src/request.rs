@@ -122,6 +122,13 @@ impl RouteRequest {
         })
     }
 
+    /// Rough prompt size in tokens (about 4 characters per token) for cost estimates.
+    pub fn estimated_tokens(&self) -> u64 {
+        let chars = self.system.as_ref().map_or(0, String::len)
+            + self.messages.iter().map(|m| m.text.len()).sum::<usize>();
+        (chars as u64).div_ceil(4)
+    }
+
     /// Text of the most recent user message, if any.
     pub fn last_user_text(&self) -> Option<&str> {
         self.messages

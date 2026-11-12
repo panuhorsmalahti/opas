@@ -54,7 +54,7 @@ pub struct Pricing {
 /// the cached prefix billed at full input price instead of the cached price. Zero for
 /// the model that served the previous turn, and when pricing is unknown.
 pub fn switch_cost(candidate: &Candidate, conversation: Option<&Conversation>) -> f64 {
-    match (conversation, &candidate.pricing) {
+    match (conversation, candidate.effective_pricing()) {
         (Some(c), Some(p)) if c.previous_model != candidate.id => {
             c.cached_tokens as f64 * (p.input - p.cached_input).max(0.0) / 1e6
         }
@@ -254,17 +254,18 @@ mod tests {
     #[test]
     fn switch_cost_prices_the_lost_cache() {
         let conv = Conversation { previous_model: "opus".into(), cached_tokens: 100_000 };
-        let priced = |id: &str, input, cached| Candidate {
-            id: id.into(),
-            pricing: Some(Pricing { input, cached_input: cached, output: 0.0 }),
+        let priced = |id: &str, input, cached| {
+            Candidate::new(id).with_pricing(Some(Pricing { input, cached_input: cached, output: 0.0 }))
         };
         // Staying on the cached model costs nothing extra.
         assert_eq!(switch_cost(&priced("opus", 4.0, 0.4), Some(&conv)), 0.0);
         // Switching pays full input price instead of cached for 100k tokens: 100k × $2.7/M.
         let c = switch_cost(&priced("sonnet", 3.0, 0.3), Some(&conv));
         assert!((c - 0.27).abs() < 1e-9);
-        // Unknown pricing or no conversation: no penalty.
+        // Unknown pricing or no conversation: no penalty; a tier implies default pricing.
         assert_eq!(switch_cost(&Candidate::new("x"), Some(&conv)), 0.0);
+        let tiered = Candidate::new("y").with_tier(Some(crate::Tier::Large));
+        assert!((switch_cost(&tiered, Some(&conv)) - 100_000.0 * 3.8 / 1e6).abs() < 1e-9);
         assert_eq!(switch_cost(&priced("sonnet", 3.0, 0.3), None), 0.0);
     }
 }

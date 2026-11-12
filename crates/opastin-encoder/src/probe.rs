@@ -1,21 +1,24 @@
-//! Linear probes over encoder activations: predict, per candidate model, the probability
-//! of success and the expected cost of a request.
+//! Linear probes over encoder activations: predict, per capability tier, the probability
+//! that a model of that tier answers a request successfully and how many output tokens
+//! it will produce. Tiers keep the probe independent of specific model names; the
+//! consumer maps its models to tiers and supplies prices.
 //!
 //! Training (probe/train_probe.py) fits standardize → PCA → logistic / ridge regression.
 //! Every step is linear, so each head is exported collapsed into one weight vector over
 //! the raw hidden state plus a bias:
 //!
-//!   p_success = sigmoid(w · h + b)        (logistic regression)
-//!   cost      = exp(w · h + b)            (ridge regression on log cost, USD)
+//!   p_success  = sigmoid(w · h + b)       (logistic regression)
+//!   out_tokens = exp(w · h + b) − 1       (ridge regression on log(1 + tokens))
 //!
 //! where `h` is the encoder's hidden state at `encoder.layer` with `encoder.pooling`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use opastin::Tier;
 use serde::{Deserialize, Serialize};
 
-pub const FORMAT: &str = "opastin-probe/1";
+pub const FORMAT: &str = "opastin-probe/2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,31 +57,33 @@ impl Linear {
     }
 }
 
-/// Predictors for one candidate model.
+/// Predictors for one tier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Head {
     pub success: Linear,
-    pub log_cost: Linear,
+    pub log_out_tokens: Linear,
+    /// True when the head was not fit on data but extrapolated from other tiers.
+    #[serde(default)]
+    pub extrapolated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeFile {
     pub format: String,
     pub encoder: EncoderSpec,
-    /// One head per model the probe was trained to predict, keyed by model name.
-    pub heads: BTreeMap<String, Head>,
+    pub heads: BTreeMap<Tier, Head>,
     /// Training provenance and evaluation results (free-form).
     #[serde(default)]
     pub metadata: serde_json::Value,
 }
 
-/// A prediction for one candidate model.
+/// A prediction for one tier.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Prediction {
-    /// Probability the model answers the request successfully.
+    /// Probability that a model of the tier answers successfully.
     pub p_success: f64,
-    /// Expected cost of the model's answer in USD.
-    pub cost: f64,
+    /// Expected output tokens.
+    pub out_tokens: f64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -116,16 +121,16 @@ impl Probe {
             return Err(ProbeError::Invalid("no heads".into()));
         }
         let n = file.encoder.n_embd;
-        for (name, head) in &file.heads {
-            for (kind, lin) in [("success", &head.success), ("log_cost", &head.log_cost)] {
+        for (tier, head) in &file.heads {
+            for (kind, lin) in [("success", &head.success), ("log_out_tokens", &head.log_out_tokens)] {
                 if lin.w.len() != n {
                     return Err(ProbeError::Invalid(format!(
-                        "head `{name}` {kind}: {} weights, expected n_embd = {n}",
+                        "{tier} {kind}: {} weights, expected n_embd = {n}",
                         lin.w.len()
                     )));
                 }
                 if !lin.b.is_finite() || lin.w.iter().any(|w| !w.is_finite()) {
-                    return Err(ProbeError::Invalid(format!("head `{name}` {kind}: non-finite weights")));
+                    return Err(ProbeError::Invalid(format!("{tier} {kind}: non-finite weights")));
                 }
             }
         }
@@ -140,24 +145,24 @@ impl Probe {
         &self.file
     }
 
-    pub fn has_head(&self, name: &str) -> bool {
-        self.file.heads.contains_key(name)
+    pub fn tiers(&self) -> impl Iterator<Item = Tier> + '_ {
+        self.file.heads.keys().copied()
     }
 
-    pub fn head_names(&self) -> impl Iterator<Item = &str> {
-        self.file.heads.keys().map(String::as_str)
+    pub fn has_tier(&self, tier: Tier) -> bool {
+        self.file.heads.contains_key(&tier)
     }
 
-    /// Predict for one head from the pooled hidden state at `spec().layer`.
-    pub fn predict(&self, head: &str, features: &[f32]) -> Option<Prediction> {
-        let h = self.file.heads.get(head)?;
+    /// Predict for one tier from the pooled hidden state at `spec().layer`.
+    pub fn predict(&self, tier: Tier, features: &[f32]) -> Option<Prediction> {
+        let h = self.file.heads.get(&tier)?;
         if features.len() != self.file.encoder.n_embd {
             return None;
         }
         let logit = h.success.apply(features);
         Some(Prediction {
             p_success: 1.0 / (1.0 + (-logit).exp()),
-            cost: h.log_cost.apply(features).clamp(-30.0, 10.0).exp(),
+            out_tokens: (h.log_out_tokens.apply(features).clamp(-30.0, 15.0).exp() - 1.0).max(0.0),
         })
     }
 }
@@ -166,7 +171,7 @@ impl Probe {
 pub(crate) mod tests {
     use super::*;
 
-    /// A 4-dimensional probe with two heads, for tests.
+    /// A 4-dimensional probe with small and large heads, for tests.
     pub(crate) fn tiny_probe() -> ProbeFile {
         let lin = |w: [f32; 4], b: f32| Linear { w: w.to_vec(), b };
         ProbeFile {
@@ -180,45 +185,46 @@ pub(crate) mod tests {
                 model: None,
             },
             heads: BTreeMap::from([
-                // "strong": succeeds often, costs ~$0.05
-                ("strong".to_string(), Head { success: lin([1.0, 0.0, 0.0, 0.0], 2.0), log_cost: lin([0.0; 4], (0.05f32).ln()) }),
-                // "cheap": success depends on feature 0, costs ~$0.001
-                ("cheap".to_string(), Head { success: lin([2.0, 0.0, 0.0, 0.0], 0.0), log_cost: lin([0.0; 4], (0.001f32).ln()) }),
+                // small: success depends on feature 0, ~200 output tokens
+                (Tier::Small, Head { success: lin([2.0, 0.0, 0.0, 0.0], 0.0), log_out_tokens: lin([0.0; 4], 201f32.ln()), extrapolated: false }),
+                // large: succeeds often, ~1000 output tokens
+                (Tier::Large, Head { success: lin([1.0, 0.0, 0.0, 0.0], 2.0), log_out_tokens: lin([0.0; 4], 1001f32.ln()), extrapolated: false }),
             ]),
             metadata: serde_json::Value::Null,
         }
     }
 
     #[test]
-    fn predicts_sigmoid_and_exp() {
+    fn predicts_success_and_tokens() {
         let probe = Probe::from_file(tiny_probe()).unwrap();
-        let p = probe.predict("cheap", &[0.0, 5.0, 5.0, 5.0]).unwrap();
+        let p = probe.predict(Tier::Small, &[0.0, 5.0, 5.0, 5.0]).unwrap();
         assert!((p.p_success - 0.5).abs() < 1e-9);
-        assert!((p.cost - 0.001).abs() < 1e-9);
-        let p = probe.predict("strong", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        assert!((p.out_tokens - 200.0).abs() < 1e-3);
+        let p = probe.predict(Tier::Large, &[1.0, 0.0, 0.0, 0.0]).unwrap();
         assert!((p.p_success - 1.0 / (1.0 + (-3.0f64).exp())).abs() < 1e-9);
-        assert!(probe.predict("missing", &[0.0; 4]).is_none());
-        assert!(probe.predict("cheap", &[0.0; 3]).is_none(), "wrong dimension");
+        assert!(probe.predict(Tier::Medium, &[0.0; 4]).is_none());
+        assert!(probe.predict(Tier::Small, &[0.0; 3]).is_none(), "wrong dimension");
     }
 
     #[test]
     fn rejects_malformed_probes() {
         let mut f = tiny_probe();
-        f.format = "other".into();
+        f.format = "opastin-probe/1".into();
         assert!(Probe::from_file(f).is_err());
         let mut f = tiny_probe();
-        f.heads.get_mut("cheap").unwrap().success.w.pop();
+        f.heads.get_mut(&Tier::Small).unwrap().success.w.pop();
         assert!(Probe::from_file(f).is_err());
         let mut f = tiny_probe();
-        f.heads.get_mut("cheap").unwrap().log_cost.b = f32::NAN;
+        f.heads.get_mut(&Tier::Small).unwrap().log_out_tokens.b = f32::NAN;
         assert!(Probe::from_file(f).is_err());
     }
 
     #[test]
-    fn round_trips_json() {
+    fn round_trips_json_with_tier_keys() {
         let json = serde_json::to_string(&tiny_probe()).unwrap();
+        assert!(json.contains("\"small\"") && json.contains("\"large\""));
         let probe = Probe::from_file(serde_json::from_str(&json).unwrap()).unwrap();
         assert_eq!(probe.spec().layer, 2);
-        assert_eq!(probe.head_names().collect::<Vec<_>>(), ["cheap", "strong"]);
+        assert_eq!(probe.tiers().collect::<Vec<_>>(), [Tier::Small, Tier::Large]);
     }
 }

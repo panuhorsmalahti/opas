@@ -73,13 +73,12 @@ fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> 
             lambda,
             n_gpu_layers,
         } => {
-            let heads = config
-                .models
-                .iter()
-                .map(|m| (m.id.clone(), m.probe_head.clone().unwrap_or_else(|| m.id.clone())))
-                .collect();
+            let untiered: Vec<&str> = config.models.iter().filter(|m| m.tier.is_none()).map(|m| m.id.as_str()).collect();
+            if !untiered.is_empty() {
+                tracing::warn!(models = ?untiered, "models without a `tier` are never chosen by the probe router");
+            }
             tracing::info!(encoder = %encoder_model.display(), probe = %probe.display(), lambda, "loading probe router");
-            let router = opastin_encoder::ProbeRouter::load(encoder_model, probe, heads, *lambda, *n_gpu_layers)?;
+            let router = opastin_encoder::ProbeRouter::load(encoder_model, probe, *lambda, *n_gpu_layers)?;
             Ok(Gateway::with_router(config, Arc::new(router)))
         }
         #[cfg(not(feature = "probe"))]

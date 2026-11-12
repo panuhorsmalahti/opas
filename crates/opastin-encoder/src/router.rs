@@ -1,20 +1,23 @@
 //! `ProbeRouter`: routes on the encoder model's activations.
 //!
-//! For each request: run the encoder's prefill (no generation), take the pooled hidden
-//! state at the probe's layer, predict each candidate's success probability `p̂` and
-//! expected cost `ĉ` (USD), and pick `argmax p̂ − λ·(ĉ + switch)`.
-//!
-//! Cache-aware: when the request continues a conversation, `switch` is the extra input
-//! cost a candidate pays because the provider's prompt cache is warm only at the model
-//! that served the previous turn (see `opastin::conversation::switch_cost`). It is zero
-//! for that model and for candidates without configured pricing.
+//! For each request:
+//! 1. Run the encoder's prefill (no generation) and take the pooled hidden state at the
+//!    probe's layer.
+//! 2. For each candidate, look up its tier's head: success probability `p̂` and expected
+//!    output tokens.
+//! 3. Price the request with the candidate's pricing (or its tier's default prices):
+//!    input tokens at the input price, output tokens at the output price.
+//!    - **Cache-aware:** if the request continues a conversation and the candidate served
+//!      the previous turn, the cached part of the prompt is billed at the cached-input
+//!      price. Every other candidate pays full price for it, so switching models mid-
+//!      conversation must buy enough expected quality to cover the lost cache.
+//! 4. Pick `argmax p̂ − λ·cost`.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use opastin::{Candidate, Decision, RouteError, RouteRequest, Router};
+use opastin::{Candidate, Decision, RouteError, RouteRequest, Router, Tier};
 
 use crate::probe::{Pooling, Prediction, Probe, ProbeError};
 use crate::{Encoder, EncoderConfig, EncoderError, ThinkingMode};
@@ -29,25 +32,47 @@ pub enum ProbeRouterError {
     Mismatch(String),
 }
 
-/// One candidate's prediction and routing score.
+/// One candidate's prediction, estimated cost and routing score.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scored {
     pub candidate: String,
-    pub head: String,
+    pub tier: Tier,
     pub prediction: Prediction,
-    /// Extra USD from losing the prompt cache by switching to this candidate.
-    pub switch_cost: f64,
-    /// `p_success − λ·(cost + switch_cost)`.
+    /// Expected USD cost of the request on this candidate.
+    pub cost: f64,
+    /// Prompt tokens billed at the cached price (non-zero only for the model that
+    /// served the previous turn of the conversation).
+    pub cached_tokens: u64,
+    /// `p_success − λ·cost`.
     pub score: f64,
 }
 
 /// Score candidates and return them best first.
 pub fn rank(mut scored: Vec<Scored>, lambda: f64) -> Vec<Scored> {
     for s in &mut scored {
-        s.score = s.prediction.p_success - lambda * (s.prediction.cost + s.switch_cost);
+        s.score = s.prediction.p_success - lambda * s.cost;
     }
     scored.sort_by(|a, b| b.score.total_cmp(&a.score));
     scored
+}
+
+/// Expected USD cost of a request on a candidate, and how many prompt tokens are billed
+/// at the cached price.
+pub fn estimate_cost(
+    candidate: &Candidate,
+    prompt_tokens: u64,
+    out_tokens: f64,
+    request: &RouteRequest,
+) -> (f64, u64) {
+    let Some(price) = candidate.effective_pricing() else {
+        return (0.0, 0);
+    };
+    let cached = match &request.conversation {
+        Some(c) if c.previous_model == candidate.id => c.cached_tokens.min(prompt_tokens),
+        _ => 0,
+    };
+    let input = cached as f64 * price.cached_input + (prompt_tokens - cached) as f64 * price.input;
+    ((input + out_tokens * price.output) / 1e6, cached)
 }
 
 /// Cheap to clone: all state is shared.
@@ -59,8 +84,6 @@ pub struct ProbeRouter {
 struct Inner {
     encoder: Mutex<Encoder>,
     probe: Probe,
-    /// Candidate id → probe head name. Candidates not listed use their own id as head.
-    heads: HashMap<String, String>,
     lambda: f64,
 }
 
@@ -69,7 +92,6 @@ impl ProbeRouter {
     pub fn load(
         encoder_model: impl AsRef<Path>,
         probe_path: impl AsRef<Path>,
-        heads: HashMap<String, String>,
         lambda: f64,
         n_gpu_layers: i32,
     ) -> Result<Self, ProbeRouterError> {
@@ -79,19 +101,18 @@ impl ProbeRouter {
             n_gpu_layers,
             max_tokens: spec.max_tokens,
             layers: Some(vec![spec.layer]),
-            thinking: if spec.thinking { ThinkingMode::Thinking } else { ThinkingMode::NonThinking },
+            thinking: if spec.thinking {
+                ThinkingMode::Thinking
+            } else {
+                ThinkingMode::NonThinking
+            },
             verbose: false,
         };
         let encoder = Encoder::load(encoder_model, config)?;
-        Self::new(encoder, probe, heads, lambda)
+        Self::new(encoder, probe, lambda)
     }
 
-    pub fn new(
-        encoder: Encoder,
-        probe: Probe,
-        heads: HashMap<String, String>,
-        lambda: f64,
-    ) -> Result<Self, ProbeRouterError> {
+    pub fn new(encoder: Encoder, probe: Probe, lambda: f64) -> Result<Self, ProbeRouterError> {
         let spec = probe.spec();
         if encoder.n_embd() != spec.n_embd {
             return Err(ProbeRouterError::Mismatch(format!(
@@ -109,15 +130,16 @@ impl ProbeRouter {
         }
         let thinking = encoder.config().thinking == ThinkingMode::Thinking;
         if thinking != spec.thinking {
-            return Err(ProbeRouterError::Mismatch("thinking mode differs from training".into()));
-        }
-        for head in heads.values() {
-            if !probe.has_head(head) {
-                return Err(ProbeRouterError::Mismatch(format!("probe has no head `{head}`")));
-            }
+            return Err(ProbeRouterError::Mismatch(
+                "thinking mode differs from training".into(),
+            ));
         }
         Ok(Self {
-            inner: Arc::new(Inner { encoder: Mutex::new(encoder), probe, heads, lambda }),
+            inner: Arc::new(Inner {
+                encoder: Mutex::new(encoder),
+                probe,
+                lambda,
+            }),
         })
     }
 
@@ -127,13 +149,6 @@ impl ProbeRouter {
 
     pub fn lambda(&self) -> f64 {
         self.inner.lambda
-    }
-
-    fn head_for(&self, candidate: &str) -> Option<String> {
-        match self.inner.heads.get(candidate) {
-            Some(h) => Some(h.clone()),
-            None => self.inner.probe.has_head(candidate).then(|| candidate.to_owned()),
-        }
     }
 
     /// Encode the request and return the probe's feature vector.
@@ -153,32 +168,43 @@ impl ProbeRouter {
     }
 
     /// Predict and rank candidates for a request (blocking; runs the encoder).
+    /// Candidates without a tier the probe knows are skipped.
     pub fn rank_blocking(
         &self,
         request: &RouteRequest,
         candidates: &[Candidate],
     ) -> Result<Vec<Scored>, RouteError> {
-        let usable: Vec<(&Candidate, String)> = candidates
+        let probe = &self.inner.probe;
+        let usable: Vec<(&Candidate, Tier)> = candidates
             .iter()
-            .filter_map(|c| self.head_for(&c.id).map(|h| (c, h)))
+            .filter_map(|c| c.tier.filter(|t| probe.has_tier(*t)).map(|t| (c, t)))
             .collect();
         if usable.is_empty() {
             return Err(if candidates.is_empty() {
                 RouteError::NoCandidates
             } else {
-                RouteError::Failed("none of the candidates has a probe head".into())
+                RouteError::Failed(format!(
+                    "no candidate has a tier the probe predicts ({})",
+                    probe.tiers().map(Tier::as_str).collect::<Vec<_>>().join(", ")
+                ))
             });
         }
-        let features = self.features(request).map_err(|e| RouteError::Failed(e.to_string()))?;
+        let features = self
+            .features(request)
+            .map_err(|e| RouteError::Failed(e.to_string()))?;
+        let prompt_tokens = request.estimated_tokens();
         let scored = usable
             .into_iter()
-            .map(|(candidate, head)| {
-                let prediction = self.inner.probe.predict(&head, &features).expect("validated head");
+            .map(|(candidate, tier)| {
+                let prediction = probe.predict(tier, &features).expect("tier checked");
+                let (cost, cached_tokens) =
+                    estimate_cost(candidate, prompt_tokens, prediction.out_tokens, request);
                 Scored {
                     candidate: candidate.id.clone(),
-                    head,
+                    tier,
                     prediction,
-                    switch_cost: opastin::conversation::switch_cost(candidate, request.conversation.as_ref()),
+                    cost,
+                    cached_tokens,
                     score: 0.0,
                 }
             })
@@ -202,21 +228,22 @@ impl Router for ProbeRouter {
         let request = request.clone();
         let candidates = candidates.to_vec();
         // The prefill takes 100+ ms of GPU work; keep it off the async executor.
-        let ranked = tokio::task::spawn_blocking(move || this.rank_blocking(&request, &candidates))
-            .await
-            .map_err(|e| RouteError::Failed(format!("encoder task failed: {e}")))??;
+        let ranked =
+            tokio::task::spawn_blocking(move || this.rank_blocking(&request, &candidates))
+                .await
+                .map_err(|e| RouteError::Failed(format!("encoder task failed: {e}")))??;
 
-        let best = &ranked[0];
         let reason = ranked
             .iter()
             .map(|s| {
+                let cached = if s.cached_tokens > 0 {
+                    format!(" ({} cached)", s.cached_tokens)
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{}: p={:.2} cost=${:.4}{} score={:.3}",
-                    s.candidate,
-                    s.prediction.p_success,
-                    s.prediction.cost,
-                    if s.switch_cost > 0.0 { format!(" +switch ${:.4}", s.switch_cost) } else { String::new() },
-                    s.score
+                    "{} ({}): p={:.2} out≈{:.0} tok cost=${:.4}{cached} score={:.3}",
+                    s.candidate, s.tier, s.prediction.p_success, s.prediction.out_tokens, s.cost, s.score
                 )
             })
             .collect::<Vec<_>>()
@@ -224,7 +251,7 @@ impl Router for ProbeRouter {
         Ok(Decision {
             decision_id: uuid::Uuid::new_v4().to_string(),
             router: "probe".into(),
-            model: best.candidate.clone(),
+            model: ranked[0].candidate.clone(),
             reason: format!("lambda={}; {reason}", self.inner.lambda),
             conversation: None,
         })
@@ -234,40 +261,113 @@ impl Router for ProbeRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opastin::{ApiFormat, Conversation, Pricing};
 
     fn scored(name: &str, p: f64, cost: f64) -> Scored {
         Scored {
             candidate: name.into(),
-            head: name.into(),
-            prediction: Prediction { p_success: p, cost },
-            switch_cost: 0.0,
+            tier: Tier::Medium,
+            prediction: Prediction {
+                p_success: p,
+                out_tokens: 0.0,
+            },
+            cost,
+            cached_tokens: 0,
             score: 0.0,
         }
     }
 
     #[test]
-    fn switch_cost_keeps_a_conversation_on_its_cached_model() {
-        // Mid-conversation: cheap would win on its own (see below), but 200k cached
-        // tokens at the strong model make switching cost 200k × $2.7/M = $0.54 extra.
-        let mut cheap = scored("cheap", 0.70, 0.001);
-        cheap.switch_cost = 0.54;
-        let r = rank(vec![scored("strong", 0.90, 0.050), cheap], 10.0);
-        assert_eq!(r[0].candidate, "strong");
-        // Without the cache penalty the cheap model wins at the same λ.
-        assert_eq!(rank(vec![scored("strong", 0.90, 0.050), scored("cheap", 0.70, 0.001)], 10.0)[0].candidate, "cheap");
-    }
-
-    #[test]
     fn lambda_trades_success_against_cost() {
         let options = || vec![scored("strong", 0.90, 0.050), scored("cheap", 0.70, 0.001)];
-        // λ = 0: quality only.
         assert_eq!(rank(options(), 0.0)[0].candidate, "strong");
-        // λ = 10/$: strong scores 0.90 − 0.5 = 0.40, cheap 0.70 − 0.01 = 0.69.
+        // λ = 10/$: strong 0.90 − 0.5 = 0.40, cheap 0.70 − 0.01 = 0.69.
         let r = rank(options(), 10.0);
         assert_eq!(r[0].candidate, "cheap");
         assert!((r[0].score - 0.69).abs() < 1e-9);
-        // Break-even: 0.2 success difference for $0.049 → λ ≈ 4.08.
+        // Break-even near λ ≈ 4.08.
         assert_eq!(rank(options(), 4.0)[0].candidate, "strong");
         assert_eq!(rank(options(), 4.2)[0].candidate, "cheap");
+    }
+
+    fn request(conversation: Option<Conversation>) -> RouteRequest {
+        let mut r = RouteRequest::from_json(
+            ApiFormat::OpenaiChat,
+            &serde_json::json!({"messages": [{"role": "user", "content": "x"}]}),
+        )
+        .unwrap();
+        r.conversation = conversation;
+        r
+    }
+
+    #[test]
+    fn cost_uses_pricing_tier_defaults_and_cache() {
+        let priced = Candidate::new("mine")
+            .with_tier(Some(Tier::Large))
+            .with_pricing(Some(Pricing {
+                input: 1.0,
+                cached_input: 0.1,
+                output: 10.0,
+            }));
+        // 10k prompt tokens × $1/M + 1k output × $10/M = $0.02.
+        let (c, cached) = estimate_cost(&priced, 10_000, 1_000.0, &request(None));
+        assert!((c - 0.02).abs() < 1e-12);
+        assert_eq!(cached, 0);
+
+        // Tier defaults when unpriced: Small = $0.10 in / $0.50 out per M.
+        let small = Candidate::new("s").with_tier(Some(Tier::Small));
+        let (c, _) = estimate_cost(&small, 10_000, 1_000.0, &request(None));
+        assert!((c - (10_000.0 * 0.10 + 1_000.0 * 0.50) / 1e6).abs() < 1e-12);
+
+        // Continuing a conversation: 8k of the 10k prompt tokens are cached at "mine".
+        let conv = Conversation {
+            previous_model: "mine".into(),
+            cached_tokens: 8_000,
+        };
+        let (c, cached) = estimate_cost(&priced, 10_000, 1_000.0, &request(Some(conv.clone())));
+        assert_eq!(cached, 8_000);
+        assert!((c - (8_000.0 * 0.1 + 2_000.0 * 1.0 + 1_000.0 * 10.0) / 1e6).abs() < 1e-12);
+        // Another candidate pays full price for the whole prompt.
+        let other = Candidate::new("other")
+            .with_tier(Some(Tier::Large))
+            .with_pricing(priced.pricing);
+        let (c2, cached2) = estimate_cost(&other, 10_000, 1_000.0, &request(Some(conv)));
+        assert_eq!(cached2, 0);
+        assert!(c2 > c);
+    }
+
+    #[test]
+    fn cache_keeps_a_conversation_on_its_model_unless_quality_justifies_a_switch() {
+        // Two medium-tier models, equal predicted quality. 200k cached tokens at "a".
+        let price = Some(Pricing {
+            input: 2.0,
+            cached_input: 0.1,
+            output: 10.0,
+        });
+        let a = Candidate::new("a").with_tier(Some(Tier::Medium)).with_pricing(price);
+        let b = Candidate::new("b").with_tier(Some(Tier::Medium)).with_pricing(price);
+        let req = request(Some(Conversation {
+            previous_model: "a".into(),
+            cached_tokens: 200_000,
+        }));
+        let score = |c: &Candidate, p: f64| {
+            let (cost, cached) = estimate_cost(c, 210_000, 500.0, &req);
+            Scored {
+                candidate: c.id.clone(),
+                tier: Tier::Medium,
+                prediction: Prediction {
+                    p_success: p,
+                    out_tokens: 500.0,
+                },
+                cost,
+                cached_tokens: cached,
+                score: 0.0,
+            }
+        };
+        // Equal quality: stay on the cached model.
+        assert_eq!(rank(vec![score(&a, 0.6), score(&b, 0.6)], 1.0)[0].candidate, "a");
+        // Switching costs 200k × $1.9/M = $0.38 more; at λ = 1 that needs > 0.38 more p.
+        assert_eq!(rank(vec![score(&a, 0.5), score(&b, 0.85)], 1.0)[0].candidate, "a");
+        assert_eq!(rank(vec![score(&a, 0.5), score(&b, 0.95)], 1.0)[0].candidate, "b");
     }
 }
