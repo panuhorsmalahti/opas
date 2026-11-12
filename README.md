@@ -1,5 +1,9 @@
 # opastin
 
+<p align="center">
+  <img src="docs/assets/opastin-hero.svg" alt="opastin: a request in any of four APIs goes through one prefill pass of Qwen3.5-9B; the hidden state of one layer feeds a linear probe that predicts success and cost per tier; opastin routes to the tier with the best success minus λ·cost" width="100%">
+</p>
+
 An LLM router written in Rust. Clients send requests to opastin in the API they already
 use; opastin picks a model for each request and proxies it to that model's provider. It
 can also return only the decision, or be used as a library.
