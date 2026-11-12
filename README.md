@@ -4,8 +4,9 @@
   <img src="docs/assets/opas-hero.svg" alt="opas: a request in any of four APIs goes through one prefill pass of Qwen3.5-9B; a linear probe on one layer predicts success, cost and response time for every model tier; opas picks the best option for the quality / speed / cost weights the client sets" width="100%">
 </p>
 
-An LLM router written in Rust. Clients send requests to opas in the API they already
-use; opas picks a model for each request and proxies it to that model's provider. It
+A model router for LLM requests: for each request, opas picks the model that best fits
+the quality, speed and cost balance you set. Clients send requests in the API they
+already use; opas chooses a model and proxies the request to that model's provider. It
 can also return only the decision, or be used as a library.
 
 - **Four APIs, unchanged on the wire:** OpenAI Chat Completions, Anthropic Messages,
