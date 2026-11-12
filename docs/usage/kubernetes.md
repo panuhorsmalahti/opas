@@ -6,8 +6,9 @@
 - a ClusterIP Service;
 - a ConfigMap with `opas.toml`.
 
-It runs the random router. For the probe router, GPU nodes and model storage, the
-[Helm chart](helm.md) has the options built in.
+It runs opas as a plain proxy: no `[router]`, so clients name the model they want.
+For the probe router, GPU nodes and model storage, the [Helm chart](helm.md) has the
+options built in.
 
 ## Install
 
@@ -78,8 +79,8 @@ So:
   source IP, but not behind a NAT shared by many clients.
 - With an ingress controller, prefer cookie- or header-based stickiness (for example
   hashing on an API key or user header).
-- One replica is enough for the proxy and random router at high request rates. The
-  work is forwarding, not computing.
+- One replica of the plain proxy handles high request rates. The work is forwarding,
+  not computing.
 
 ## Probe router on Kubernetes
 

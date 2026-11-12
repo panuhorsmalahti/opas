@@ -46,33 +46,31 @@ For each request:
    prefix. If an earlier turn of this conversation was served within the cache TTL, the
    router is told which model served it and roughly how many prompt tokens that
    provider has cached.
-4. **Route.** The configured router picks a candidate:
-   - **`random`:** uniform random, the baseline any real router must beat at equal
-     cost. It stays on the previous model of a continued conversation, because a random
-     switch only loses the cache.
-   - **`probe`:**
-     - The encoder (Qwen3.5-9B, in-process via llama.cpp) runs one prefill pass over the
-       chat-formatted request, and the hidden state of one layer is taken.
-     - For each candidate's tier, linear heads predict the success probability `p̂` and
-       output tokens.
-     - Cost = prompt tokens × input price + predicted output tokens × output price.
-       Prices come from the request, the config, models.dev or the tier's defaults (most
-       specific first). For the model that served the
-       previous turn, the cached part of the prompt is billed at the cached-input price.
-     - Response time = time to first token + output tokens ÷ output speed (the
-       candidate's `speed` or its tier's defaults): the total time to the complete
-       response.
-     - Each candidate gets three 0–1 scores:
-       - **quality** = `p̂`;
-       - **cost**: 1 for the cheapest, falling to 0 at 100× the cheapest (log scale);
-       - **speed**: 1 for the fastest, falling to 0 at 10× slower.
-     - They are combined with the request's **weights**. The default is quality 60 /
-       speed 20 / cost 20, as in OpenRouter's Router Index; set them per request with
-       `x-opas-weights: quality=…,speed=…,cost=…`, a preset (`x-opas-preference: quality`,
-       `balanced`, `cost` or `speed`), or `weights` / `preference` in `/v1/route`.
-     - The highest weighted score wins. Every candidate's estimates (success
-       probability, expected cost, expected response time and the scores) are returned
-       by `/v1/route`, so a client can also apply its own rule.
+4. **Route.** The probe router picks a candidate (without a `[router]` in the config,
+   opas is a plain proxy and requests must name a model):
+   - The encoder (Qwen3.5-9B, in-process via llama.cpp) runs one prefill pass over the
+     chat-formatted request, and the hidden state of one layer is taken.
+   - For each candidate's tier, linear heads predict the success probability `p̂` and
+     output tokens.
+   - Cost = prompt tokens × input price + predicted output tokens × output price.
+     Prices come from the request, the config, models.dev or the tier's defaults (most
+     specific first). For the model that served the
+     previous turn, the cached part of the prompt is billed at the cached-input price.
+   - Response time = time to first token + output tokens ÷ output speed (the
+     candidate's `speed` or its tier's defaults): the total time to the complete
+     response.
+   - Each candidate gets three 0–1 scores:
+     - **quality** = `p̂` relative to the best candidate's `p̂` (1 for the most likely
+       to succeed);
+     - **cost**: 1 for the cheapest, falling to 0 at 100× the cheapest (log scale);
+     - **speed**: 1 for the fastest, falling to 0 at 10× slower.
+   - They are combined with the request's **weights**. The default is quality 60 /
+     speed 20 / cost 20, as in OpenRouter's Router Index; set them per request with
+     `x-opas-weights: quality=…,speed=…,cost=…`, a preset (`x-opas-preference: quality`,
+     `balanced`, `cost` or `speed`), or `weights` / `preference` in `/v1/route`.
+   - The highest weighted score wins. Every candidate's estimates (success
+     probability, expected cost, expected response time and the scores) are returned
+     by `/v1/route`, so a client can also apply its own rule.
 5. **Forward.** The request goes to the chosen model's upstream for that API format,
    with the model name rewritten. The response streams back. For stateful APIs, the
    response id is recorded for step 2.
@@ -89,14 +87,20 @@ Default tier prices (USD per million tokens) are used when a model has no `prici
 ## Quick start
 
 ```sh
+# The encoder model (9.5 GB, not in the repo). The trained predictor is in probes/.
+mkdir -p models/gguf
+curl -L -o models/gguf/Qwen3.5-9B-Q8_0.gguf \
+  https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf
+
 cp opas.example.toml opas.toml
 export ANTHROPIC_API_KEY=...
 cargo run --release -p opas-server -- --config opas.toml
 ```
 
 The first build compiles llama.cpp for the probe router, which needs cmake
-(`brew install cmake` or `apt install cmake clang libclang-dev`). Without it, build the
-random-router-only server with `cargo build -p opas-server --no-default-features`.
+(`brew install cmake` or `apt install cmake clang libclang-dev`). Without it,
+`cargo build -p opas-server --no-default-features` builds a plain proxy with no router:
+requests must name a configured model.
 
 Point an SDK at it (base URL `http://127.0.0.1:8080/v1`, or `http://127.0.0.1:8080` for
 Anthropic SDKs), or call it directly:
@@ -173,7 +177,7 @@ See [opas.example.toml](opas.example.toml). In short:
 router_model = "auto"
 
 [router]
-kind = "probe"                                      # or "random"
+kind = "probe"                                      # leave out [router] for a plain proxy
 encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"
 probe = "probes/llmrouterbench-qwen35-9b.json"    # included in the repo
 weights = { quality = 60, speed = 20, cost = 20 }  # default balance; requests can override
@@ -224,7 +228,27 @@ cd training && uv run train_probe.py
 - **Evaluation:** a held-out split compares probe routing against random routing at the
   same cost, single tiers, a benchmark-identity router and the oracle.
 
-Results: [docs/probe-results.md](docs/probe-results.md).
+**Results** on the held-out split (832 prompts; full report in
+[docs/probe-results.md](docs/probe-results.md)):
+
+| Router | Success | Mean cost / request |
+|---|---|---|
+| always small / medium / large | 0.475 / 0.517 / 0.574 | $0.014 / $0.018 / $0.042 |
+| opas, `quality` preset (100/0/0) | 0.570 | $0.036 |
+| opas, default `balanced` (60/20/20) | 0.545 | $0.023 |
+| random routing at the same $0.023 | 0.508 | $0.023 |
+| oracle (best tier per prompt) | 0.640 | $0.021 |
+
+- **What works:** with the default weights, opas beats random routing at the same cost
+  by 3.7 points, and comes within 3 points of always using the large tier at 56% of
+  its cost.
+- **What doesn't (yet):** on this benchmark, a TF-IDF bag-of-words router does about as
+  well as the activation probe (within a point at every cost level). Most of the
+  signal is which kind of task a prompt is. The probe is better at ranking difficulty
+  *within* a benchmark (cross-validated AUROC 0.672 vs 0.576 for TF-IDF), but that gain is small in
+  routing terms here.
+- **Limits:** the tiers are open models from 2025 rather than the Claude models in the
+  example config; the xlarge head is extrapolated; speed scores use tier-default speeds.
 
 `training/reference/` holds a Python (MLX) reimplementation of the encoder, used to
 cross-check the Rust encoder; see its README.

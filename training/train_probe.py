@@ -210,6 +210,34 @@ def routing_eval(p, k_pred, frac, cost, price_per_token, lambdas):
     return out
 
 
+# Same scoring as opas::scoring (Rust): quality = p relative to the best candidate; cost
+# and speed on fixed log scales.
+COST_RANGE, TIME_RANGE = 100.0, 10.0
+# Tier default speeds (opas::Tier::default_speed): output tokens/s, time to first token.
+TIER_SPEED = {"small": (150.0, 0.4), "medium": (80.0, 0.6), "large": (50.0, 1.0), "xlarge": (35.0, 1.5)}
+PRESETS = {"quality": (100, 0, 0), "balanced": (60, 20, 20), "cost": (20, 10, 70), "speed": (20, 70, 10)}
+
+
+def log_score(v, best, rng):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = 1 - np.log(np.maximum(v, 1e-12) / best) / np.log(rng)
+    return np.clip(np.where(v <= best, 1.0, s), 0, 1)
+
+
+def weights_eval(p, k_pred, frac, cost, price_per_token, weights):
+    """Route with opas's weighted quality/speed/cost score; return (success, cost, share)."""
+    exp_cost = k_pred * price_per_token[None, :]
+    time = np.column_stack([TIER_SPEED[t][1] + k_pred[:, i] / TIER_SPEED[t][0] for i, t in enumerate(TRAINED_TIERS)])
+    wq, ws, wc = (np.array(weights, float) / sum(weights))
+    cs = log_score(exp_cost, exp_cost.min(1, keepdims=True), COST_RANGE)
+    ss = log_score(time, time.min(1, keepdims=True), TIME_RANGE)
+    q = p / np.maximum(p.max(1, keepdims=True), 1e-12)
+    score = wq * q + ws * ss + wc * cs
+    pick = np.argmax(score, axis=1)
+    rows = np.arange(len(pick))
+    return float(frac[rows, pick].mean()), float(cost[rows, pick].mean()), np.bincount(pick, minlength=p.shape[1]) / len(pick)
+
+
 def random_at_cost(frac, cost, target):
     """Random routing between the cheapest and priciest tier mixed to match `target` cost."""
     c, s = cost.mean(0), frac.mean(0)
@@ -299,11 +327,16 @@ def main():
     Xd = ohe.transform(datasets.reshape(-1, 1)).toarray()
     ds_probe.fit(Xd[idx_train], frac[idx_train], tokens[idx_train])
     p_ds, k_ds = ds_probe.predict(Xd[idx_test])
+    # TF-IDF router: a cheap text classifier, the fair "no LLM" alternative.
+    tf_probe = TierProbe(sparse=True, C=1.0, alpha=1.0)
+    tf_probe.fit(tfidf.transform([prompts[i] for i in idx_train]), frac[idx_train], tokens[idx_train])
+    p_tf, k_tf = tf_probe.predict(tfidf.transform([prompts[i] for i in idx_test]))
 
     lambdas = [0, 1, 3, 10, 30, 100, 300, 1000]
     f_te, c_te = frac[idx_test], cost[idx_test]
     probe_curve = routing_eval(p_te, k_te, f_te, c_te, price_per_token, lambdas)
     ds_curve = routing_eval(p_ds, k_ds, f_te, c_te, price_per_token, lambdas)
+    tf_curve = routing_eval(p_tf, k_tf, f_te, c_te, price_per_token, lambdas)
     singles = {t: (float(f_te[:, i].mean()), float(c_te[:, i].mean())) for i, t in enumerate(TRAINED_TIERS)}
     # Oracle: per prompt, the tier with the highest success, cheapest among ties.
     oracle_pick = np.array(
@@ -314,16 +347,23 @@ def main():
     print("\nrouting between tiers on the held-out split:")
     for t, (s, c) in singles.items():
         print(f"  always {t:<6} success {s:.3f}  cost ${c:.5f}")
-    for (lam, s, c, share), (_, s_ds, c_ds, _) in zip(probe_curve, ds_curve):
+    for (lam, s, c, share), (_, s_ds, c_ds, _), (_, s_tf, c_tf, _) in zip(probe_curve, ds_curve, tf_curve):
         affordable = [v[0] for v in singles.values() if v[1] <= c * 1.0001]
         row = {"lambda": lam, "success": s, "cost": c, "share": dict(zip(TRAINED_TIERS, map(float, share))),
                "random_same_cost": random_at_cost(f_te, c_te, c),
                "best_single_within_cost": max(affordable) if affordable else None,
-               "dataset_router": (s_ds, c_ds)}
+               "dataset_router": (s_ds, c_ds), "tfidf_router": (s_tf, c_tf)}
         routing.append(row)
         print(f"  lambda {lam:>5}: success {s:.3f} cost ${c:.5f} | random at same cost {row['random_same_cost']:.3f}"
-              f" | dataset router {s_ds:.3f} @ ${c_ds:.5f} | share {np.round(share, 2)}")
+              f" | dataset router {s_ds:.3f} @ ${c_ds:.5f} | TF-IDF router {s_tf:.3f} @ ${c_tf:.5f} | share {np.round(share, 2)}")
     print(f"  oracle: success {oracle[0]:.3f} cost ${oracle[1]:.5f}")
+    presets = {}
+    print("\nweight presets (opas scoring, tier-default speeds):")
+    for name, w in PRESETS.items():
+        s_, c_, share = weights_eval(p_te, k_te, f_te, c_te, price_per_token, w)
+        presets[name] = {"weights": w, "success": s_, "cost": c_, "share": dict(zip(TRAINED_TIERS, map(float, share))),
+                         "random_same_cost": random_at_cost(f_te, c_te, c_)}
+        print(f"  {name:<9} {w}: success {s_:.3f} cost ${c_:.5f} | random at same cost {presets[name]['random_same_cost']:.3f} | share {np.round(share, 2)}")
 
     # Final probe on all prompts, collapsed to weights over h.
     final = TierProbe(C=best_C, alpha=best_alpha).fit(fx_best(np.arange(n)), frac, tokens)
@@ -371,11 +411,11 @@ def main():
 
     write_report(args.report, meta, tiers, rate, n, idx_train, idx_test, results, sweep, grid,
                  best_layer, best_pool, best_C, best_alpha, test, singles, routing, oracle,
-                 price_per_token, args.out)
+                 price_per_token, args.out, presets)
 
 
 def write_report(path, meta, tiers, rate, n, idx_train, idx_test, baselines, sweep, grid,
-                 best_layer, best_pool, best_C, best_alpha, test, singles, routing, oracle, ppt, out):
+                 best_layer, best_pool, best_C, best_alpha, test, singles, routing, oracle, ppt, out, presets):
     L = ["# Probe results: LLMRouterBench, Qwen3.5-9B activations\n"]
     L.append(f"Generated by `training/train_probe.py` on {dt.date.today().isoformat()}: {n} prompts "
              f"({len(idx_train)} train / {len(idx_test)} held-out test, stratified by dataset), encoder "
@@ -408,12 +448,21 @@ def write_report(path, meta, tiers, rate, n, idx_train, idx_test, baselines, swe
     for t, (s, c) in singles.items():
         L.append(f"| always {t} | {s:.3f} | ${c:.5f} |")
     L.append(f"| oracle (best tier per prompt, cheapest among ties) | {oracle[0]:.3f} | ${oracle[1]:.5f} |\n")
-    L.append("| λ | Probe: success @ cost | Tier share (S/M/L) | Random routing at the same cost | Best single tier at ≤ that cost | Dataset-identity router |\n|---|---|---|---|---|---|")
+    L.append("| λ | Probe: success @ cost | Tier share (S/M/L) | Random routing at the same cost | Best single tier at ≤ that cost | TF-IDF router | Benchmark-identity router |\n|---|---|---|---|---|---|---|")
     for r in routing:
         bs = r["best_single_within_cost"]
         share = "/".join(f"{r['share'][t]:.2f}" for t in TRAINED_TIERS)
         L.append(f"| {r['lambda']:g} | {r['success']:.3f} @ ${r['cost']:.5f} | {share} | {r['random_same_cost']:.3f} | "
-                 f"{'—' if bs is None else f'{bs:.3f}'} | {r['dataset_router'][0]:.3f} @ ${r['dataset_router'][1]:.5f} |")
+                 f"{'—' if bs is None else f'{bs:.3f}'} | {r['tfidf_router'][0]:.3f} @ ${r['tfidf_router'][1]:.5f} | "
+                 f"{r['dataset_router'][0]:.3f} @ ${r['dataset_router'][1]:.5f} |")
+    L.append("\n### Weight presets (what the router does by default)\n")
+    L.append("The router scores quality (p relative to the best candidate), cost (log scale, 0 at 100× the cheapest) and "
+             "speed (log scale, 0 at 10× the fastest, from tier-default speeds) and takes the weighted average, exactly as "
+             "`opas::scoring` does.\n")
+    L.append("| Preset | Quality / speed / cost | Success | Mean cost | Random routing at the same cost | Tier share (S/M/L) |\n|---|---|---|---|---|---|")
+    for name, r in presets.items():
+        share = "/".join(f"{r['share'][t]:.2f}" for t in TRAINED_TIERS)
+        L.append(f"| {name} | {'/'.join(map(str, r['weights']))} | {r['success']:.3f} | ${r['cost']:.5f} | {r['random_same_cost']:.3f} | {share} |")
     shown = out.relative_to(ROOT) if out.is_relative_to(ROOT) else out
     L.append(f"\nThe exported probe (`{shown}`, committed to the repo) is refit on all {n} prompts. The xlarge head is not evaluated: "
              "the benchmark has no model of that class.\n")

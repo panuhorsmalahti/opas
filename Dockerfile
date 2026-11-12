@@ -56,7 +56,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --home /nonexistent --shell /usr/sbin/nologin opas
 COPY --from=build /usr/local/bin/opas /usr/local/bin/opas-encode /usr/local/bin/
+# The example config, with the encoder model expected on a volume at /models and the
+# bundled predictor at /opt/opas/probes.
 COPY opas.example.toml /etc/opas/opas.toml
+RUN sed -i -e 's|^encoder_model = "models/|encoder_model = "/models/|' \
+           -e 's|^probe = "probes/|probe = "/opt/opas/probes/|' /etc/opas/opas.toml
 # The trained predictor (small) ships in the image; the encoder model is mounted.
 COPY probes /opt/opas/probes
 

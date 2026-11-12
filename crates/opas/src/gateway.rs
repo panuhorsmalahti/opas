@@ -129,26 +129,31 @@ pub struct Forwarded {
 /// Routes requests and forwards them to the chosen model's upstream.
 pub struct Gateway {
     config: Config,
-    router: Arc<dyn Router>,
+    router: Option<Arc<dyn Router>>,
     tracker: Option<ConversationTracker>,
     catalog: RwLock<Arc<PriceCatalog>>,
     http: reqwest::Client,
 }
 
 impl Gateway {
-    /// Build with the router named in `config.router`. Fails for routers this crate
-    /// cannot build (the probe router); use [`Gateway::with_router`] for those.
+    /// A plain proxy without a router: requests must name a configured model. Fails if
+    /// the config has a `[router]`, which must be built by the caller (it needs
+    /// `opas-encoder`) and passed to [`Gateway::with_router`].
     pub fn new(config: Config) -> Result<Self, ConfigError> {
-        let router = config.router.build().ok_or_else(|| {
-            ConfigError::Invalid(
-                "this router kind must be built by the caller (Gateway::with_router)".into(),
-            )
-        })?;
-        Ok(Self::with_router(config, router))
+        if config.router.is_some() {
+            return Err(ConfigError::Invalid(
+                "the configured router must be built by the caller (Gateway::with_router)".into(),
+            ));
+        }
+        Ok(Self::build(config, None))
     }
 
-    /// Build with a custom router.
+    /// Build with a router.
     pub fn with_router(config: Config, router: Arc<dyn Router>) -> Self {
+        Self::build(config, Some(router))
+    }
+
+    fn build(config: Config, router: Option<Arc<dyn Router>>) -> Self {
         Self {
             tracker: config.cache.tracker(),
             config,
@@ -294,8 +299,9 @@ impl Gateway {
         &self.config
     }
 
-    pub fn router(&self) -> &Arc<dyn Router> {
-        &self.router
+    /// The router, if any (a plain proxy has none).
+    pub fn router(&self) -> Option<&Arc<dyn Router>> {
+        self.router.as_ref()
     }
 
     /// Choose a model for a request body without sending it anywhere, among the
@@ -374,7 +380,13 @@ impl Gateway {
                 ),
             }
         }
-        let mut decision = self.router.route(&request, &candidates).await?;
+        let Some(router) = &self.router else {
+            return Err(GatewayError::BadRequest(format!(
+                "no router is configured: request a configured model by id instead of `{}`",
+                self.config.router_model
+            )));
+        };
+        let mut decision = router.route(&request, &candidates).await?;
         if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
             tracker.record(keys, &decision.model);
         }

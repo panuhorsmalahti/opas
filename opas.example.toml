@@ -7,16 +7,13 @@ listen = "127.0.0.1:8080"
 # instead skips routing and goes straight to that model.
 router_model = "auto"
 
+# The activation-probe router (see README "How routing works"). Without a [router]
+# section opas is a plain proxy: requests must name a configured model.
 [router]
-kind = "random"   # uniform random choice (cache-aware: continued conversations stay put)
-# seed = 42         # reproducible sequence of choices
-
-# The activation-probe router instead (see README "How routing works"):
-# [router]
-# kind = "probe"
-# encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"
-# probe = "probes/llmrouterbench-qwen35-9b.json"   # included in the repo
-# weights = { quality = 60, speed = 20, cost = 20 }   # default balance; requests override with x-opas-weights
+kind = "probe"
+encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"   # download: see README "Run it"
+probe = "probes/llmrouterbench-qwen35-9b.json"        # included in the repo
+weights = { quality = 60, speed = 20, cost = 20 }     # default balance; requests override with x-opas-weights
 # n_gpu_layers = -1      # encoder layers on the GPU (-1 = all, 0 = CPU only)
 
 # Cache-aware routing: remember which model served each conversation so the next turn

@@ -1,6 +1,6 @@
 # Hardware for the probe router
 
-The random router needs almost nothing. The probe router runs an encoder model
+A plain proxy (no `[router]`) needs almost nothing. The probe router runs an encoder model
 (Qwen3.5-9B, 9.5 GB as Q8_0) over every routed request, so where that model runs decides
 the routing latency.
 
@@ -38,7 +38,7 @@ GPU, or make the CPU job much smaller (see "Options" below).
 | **NVIDIA GPU, CUDA image** | fastest | `docker build -f Dockerfile.cuda`. Run with `--gpus all`, or in Kubernetes on GPU nodes (`gpu.enabled=true` in the Helm chart). Untested in this repository's CI: there are no GPU runners. |
 | **Apple Silicon, bare metal** | fast | Run the `opas` binary natively (no container) on a Mac mini / Mac Studio / Mac Pro; Metal is used automatically. Put a Kubernetes service in front if needed (an `ExternalName` Service, or a Service with manual Endpoints pointing at the Mac). |
 | **CPU, tuned** | 5–20× slower than GPU | Fine for batch or offline work, or low-volume traffic with short prompts. See the tuning below. |
-| **Split deployment** | — | Run the random or proxy-only server (`--no-default-features`, tiny) where clients are, and the probe router only on GPU hosts. Clients can also use `/v1/route` there and call providers themselves. |
+| **Split deployment** | — | Run a plain proxy (no `[router]`; `--no-default-features` builds it without llama.cpp) where clients are, and the probe router only on GPU hosts. Clients can also use `/v1/route` there and call providers themselves. |
 
 Other llama.cpp backends are exposed as cargo features, but have no Dockerfile in this
 repository:

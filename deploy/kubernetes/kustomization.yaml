@@ -1,4 +1,4 @@
-# Plain Kubernetes manifests for opas (random router, no local models).
+# Plain Kubernetes manifests for opas as a plain proxy (no router, no local models).
 #   kubectl create namespace opas
 #   kubectl -n opas create secret generic opas-api-keys --from-literal=ANTHROPIC_API_KEY=...
 #   kubectl apply -n opas -k deploy/kubernetes

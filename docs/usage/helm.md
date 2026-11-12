@@ -15,7 +15,8 @@ helm install opas deploy/helm/opas -n opas \
 ```
 
 `--set-file config=...` uses your own `opas.toml`; without it the chart's example
-config is used (random choice between two Claude models). After the install, `helm status`
+config is used: a plain proxy to two Claude models, without a router. The probe
+router needs the encoder model; see the example below. After the install, `helm status`
 prints how to try it with a port-forward.
 
 ## Values

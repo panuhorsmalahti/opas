@@ -32,13 +32,11 @@ send a configured model id to go direct.
 
 ## Routers
 
-The router is set by `[router] kind` in the config:
+`[router] kind = "probe"` runs the activation-probe router from `opas-encoder`. It needs
+the `probe` feature, which is on by default, links llama.cpp, and needs cmake to build.
 
-- `random`: random, and cache-aware (a continued conversation stays on its model).
-- `probe`: the activation-probe router from `opas-encoder`. It needs the `probe`
-  feature, which is on by default, links llama.cpp, and needs cmake to build.
-
-Build without the probe router and without llama.cpp:
+Without a `[router]` section the server is a plain proxy: requests must name a
+configured model, and `auto` is rejected. Build that without llama.cpp:
 `cargo build -p opas-server --no-default-features`.
 
 ## Run

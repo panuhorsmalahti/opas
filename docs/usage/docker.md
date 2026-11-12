@@ -14,14 +14,40 @@ docker build -f Dockerfile.cuda -t opas:cuda .            # NVIDIA GPU build (un
 Images from CI are published as `ghcr.io/OWNER/opas:<tag>` (see
 `.github/workflows/release.yml`).
 
-## Run the proxy (random router)
+## Run it
+
+The trained predictor ships in the image at `/opt/opas/probes/`. The encoder model
+(9.5 GB) does not: download it once (see the README's "Quick start") and mount it at
+`/models`. The image's default config is `opas.example.toml` with its paths pointing
+there, routing between Claude Opus and Haiku:
+
+```sh
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e ANTHROPIC_API_KEY \
+  -v "$PWD/models:/models:ro" \
+  --memory 12g \
+  opas
+```
+
+To use your own models, tiers and prices, mount a config:
 
 ```sh
 cp opas.example.toml opas.toml        # edit models, tiers, pricing
-docker run --rm -p 127.0.0.1:8080:8080 \
-  -e ANTHROPIC_API_KEY \
+docker run --rm -p 127.0.0.1:8080:8080 -e ANTHROPIC_API_KEY \
+  -v "$PWD/models:/models:ro" \
   -v "$PWD/opas.toml:/etc/opas/opas.toml:ro" \
+  --memory 12g \
   opas
+```
+
+In a mounted config, use the container paths:
+
+```toml
+[router]
+kind = "probe"
+encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
+probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"   # shipped in the image
+weights = { quality = 60, speed = 20, cost = 20 }
 ```
 
 **Keep the port on localhost:** `-p 127.0.0.1:8080:8080` publishes it on the host's
@@ -42,26 +68,7 @@ let anyone on your network use your provider API keys.
 
 Health check: `curl localhost:8080/healthz`.
 
-## Run the probe router
-
-The trained predictor ships in the image at `/opt/opas/probes/`. Mount the encoder
-model and point the config at both:
-
-```toml
-[router]
-kind = "probe"
-encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
-probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"   # shipped in the image
-weights = { quality = 60, speed = 20, cost = 20 }
-```
-
-```sh
-docker run --rm -p 127.0.0.1:8080:8080 -e ANTHROPIC_API_KEY \
-  -v "$PWD/models:/models:ro" \
-  -v "$PWD/opas.toml:/etc/opas/opas.toml:ro" \
-  --memory 12g \
-  opas
-```
+## GPU, speed and the plain proxy
 
 With the CUDA image, add `--gpus all` (this needs the NVIDIA Container Toolkit on the
 host).
@@ -69,6 +76,10 @@ host).
 **Expected speed:** on CPU the 9B encoder adds roughly 1–4 s to short prompts and much more
 to long ones. On macOS, Docker cannot use the Apple GPU at all; run the binary natively
 there. See [hardware](hardware.md) for measurements and options.
+
+**Without the encoder:** remove the `[router]` section from your config. opas then runs
+as a plain proxy (no model mount, about 20 MB of memory), and requests must name a
+configured model instead of `auto`.
 
 ## Docker Compose
 
@@ -81,7 +92,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
       - ./opas.toml:/etc/opas/opas.toml:ro
-      - ./models:/models:ro          # only for the probe router
+      - ./models:/models:ro          # the encoder model
     restart: unless-stopped
 ```
 

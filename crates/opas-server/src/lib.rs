@@ -295,11 +295,14 @@ async fn pricing(State(gw): State<AppState>) -> Response {
     .into_response()
 }
 
-/// List the router model and configured models. Anthropic-shaped if the client sent
-/// `anthropic-version`, OpenAI-shaped otherwise.
+/// List the router model (when a router is configured) and the configured models.
+/// Anthropic-shaped if the client sent `anthropic-version`, OpenAI-shaped otherwise.
 async fn models(State(gw): State<AppState>, headers: HeaderMap) -> Response {
     let config = gw.config();
-    let ids: Vec<&str> = std::iter::once(config.router_model.as_str())
+    let ids: Vec<&str> = gw
+        .router()
+        .map(|_| config.router_model.as_str())
+        .into_iter()
         .chain(config.models.iter().map(|m| m.id.as_str()))
         .collect();
 

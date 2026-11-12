@@ -2,14 +2,13 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::api::ApiFormat;
 use crate::conversation::{ConversationTracker, Pricing, Speed};
-use crate::router::{Candidate, RandomRouter, Router};
+use crate::router::Candidate;
 use crate::tier::Tier;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,8 +20,9 @@ pub struct Config {
     /// The virtual model name clients send to get a routed request.
     #[serde(default = "default_router_model")]
     pub router_model: String,
+    /// The router; omit it to run as a plain proxy.
     #[serde(default)]
-    pub router: RouterConfig,
+    pub router: Option<RouterConfig>,
     #[serde(default)]
     pub cache: CacheConfig,
     #[serde(default)]
@@ -124,20 +124,16 @@ fn default_gpu_layers() -> i32 {
     -1
 }
 
+/// The router. Without one, opas is a plain proxy: requests must name a configured model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RouterConfig {
-    /// Uniform random choice. `seed` makes the sequence reproducible.
-    Random {
-        #[serde(default)]
-        seed: Option<u64>,
-    },
     /// Activation probe: runs a local encoder model and a trained linear probe
     /// (opas-encoder). Built by opas-server, not by this crate.
     Probe {
         /// GGUF encoder model, e.g. `models/gguf/Qwen3.5-9B-Q8_0.gguf`.
         encoder_model: PathBuf,
-        /// Probe weights exported by `training/train_probe.py`.
+        /// Trained predictor, e.g. `probes/llmrouterbench-qwen35-9b.json`.
         probe: PathBuf,
         /// Default quality / speed / cost weights; requests can override them.
         /// Defaults to quality 60 / speed 20 / cost 20.
@@ -147,27 +143,6 @@ pub enum RouterConfig {
         #[serde(default = "default_gpu_layers")]
         n_gpu_layers: i32,
     },
-}
-
-impl Default for RouterConfig {
-    fn default() -> Self {
-        RouterConfig::Random { seed: None }
-    }
-}
-
-impl RouterConfig {
-    /// Build a router implemented in this crate. Returns `None` for routers that need
-    /// another crate (the probe router); build those yourself and use
-    /// `Gateway::with_router`.
-    pub fn build(&self) -> Option<Arc<dyn Router>> {
-        match self {
-            RouterConfig::Random { seed: Some(s) } => {
-                Some(Arc::new(RandomRouter::with_seed(*s)))
-            }
-            RouterConfig::Random { seed: None } => Some(Arc::new(RandomRouter::new())),
-            RouterConfig::Probe { .. } => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,9 +300,6 @@ mod tests {
 
     const EXAMPLE: &str = r#"
         router_model = "auto"
-        [router]
-        kind = "random"
-        seed = 3
 
         [[models]]
         id = "big"
@@ -344,7 +316,7 @@ mod tests {
     fn parses_and_filters_by_format() {
         let c = Config::from_toml_str(EXAMPLE).unwrap();
         assert_eq!(c.listen, "127.0.0.1:8080");
-        assert_eq!(c.router, RouterConfig::Random { seed: Some(3) });
+        assert_eq!(c.router, None, "no [router]: plain proxy");
         assert_eq!(c.model("big").unwrap().upstream_model(), "big-2026");
         assert_eq!(c.model("small").unwrap().upstream_model(), "small");
         let ids = |f| {
@@ -380,11 +352,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(c.router, RouterConfig::Probe { weights, n_gpu_layers: -1, .. } if weights == crate::Weights::new(50.0, 0.0, 50.0))
-        );
-        assert!(
-            c.router.build().is_none(),
-            "probe router is built outside the core crate"
+            matches!(c.router, Some(RouterConfig::Probe { weights, n_gpu_layers: -1, .. }) if weights == crate::Weights::new(50.0, 0.0, 50.0))
         );
         assert_eq!(c.cache.ttl_secs, 3600);
         assert!(c.cache.enabled);
@@ -394,11 +362,11 @@ mod tests {
         assert_eq!(c.models[0].models_dev.as_deref(), Some("openai/gpt-5"));
         assert!(c.pricing.models_dev, "models.dev lookups on by default");
 
-        // Defaults: cache on, 5-minute TTL, random router.
+        // Defaults: cache on, 5-minute TTL, no router.
         let d = Config::from_toml_str("[[models]]\nid = \"x\"\nopenai = { base_url = \"u\" }\n")
             .unwrap();
         assert_eq!(d.cache, CacheConfig::default());
-        assert!(d.router.build().is_some());
+        assert!(d.router.is_none());
     }
 
     #[test]

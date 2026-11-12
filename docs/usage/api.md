@@ -156,7 +156,7 @@ wins:
 | Header | When | Meaning |
 |---|---|---|
 | `x-opas-model` | always | Configured model id that served the request |
-| `x-opas-router` | routed requests | `random`, `probe`, or `affinity` (pinned by stored provider state) |
+| `x-opas-router` | routed requests | `probe`, or `affinity` (pinned by stored provider state) |
 | `x-opas-decision-id` | routed requests | Unique id of the decision, for logs and outcome feedback |
 | `x-opas-estimate` | routed requests (probe router) | The chosen model's `p_success`, `cost_usd` and `response_time_s` |
 | `x-opas-previous-model` | continued conversations | Model that served the previous turn (cache-aware routing recognized the conversation) |
@@ -165,11 +165,9 @@ wins:
 
 Nothing special is needed: send each turn with the full history, as these APIs expect.
 opas fingerprints the history and recognizes the conversation. The router then knows
-which model's prompt cache is warm:
-
-- The random router stays on that model.
-- The probe router charges every other candidate the full input price for the cached
-  prefix, so it switches only when the expected quality gain is worth it.
+which model's prompt cache is warm. The probe router charges every other candidate the
+full input price for the cached prefix, so it switches only when the expected gain is
+worth it.
 
 Recognition lasts for `[cache] ttl_secs` (default 300 s, matching typical provider cache
 lifetimes). It is kept in memory in each server process.

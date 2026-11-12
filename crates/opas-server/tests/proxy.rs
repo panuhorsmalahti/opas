@@ -122,19 +122,50 @@ impl Router for FixedPredictions {
     }
 }
 
-async fn harness() -> Harness {
-    harness_with(None).await
+/// Test router that cycles through the candidates, so consecutive requests land on
+/// different models, except that a continued conversation stays on the model holding its
+/// cache (the probe router does this through the cached-token discount).
+#[derive(Default)]
+struct RoundRobin(AtomicUsize);
+
+#[async_trait::async_trait]
+impl Router for RoundRobin {
+    fn name(&self) -> &str {
+        "round-robin"
+    }
+
+    async fn route(&self, req: &RouteRequest, cands: &[Candidate]) -> Result<Decision, RouteError> {
+        if cands.is_empty() {
+            return Err(RouteError::NoCandidates);
+        }
+        let warm = req
+            .conversation
+            .as_ref()
+            .and_then(|c| cands.iter().position(|m| m.id == c.previous_model));
+        let i = warm.unwrap_or_else(|| self.0.fetch_add(1, Ordering::SeqCst) % cands.len());
+        Ok(Decision {
+            decision_id: format!("d{i}"),
+            router: self.name().into(),
+            model: cands[i].id.clone(),
+            reason: "round robin".into(),
+            conversation: None,
+            weights: None,
+            estimates: Vec::new(),
+        })
+    }
 }
 
+async fn harness() -> Harness {
+    harness_with(Some(Arc::new(RoundRobin::default()))).await
+}
+
+/// `None` builds the gateway without a router: a plain proxy.
 async fn harness_with(router: Option<Arc<dyn Router>>) -> Harness {
     let calls = Arc::new(AtomicUsize::new(0));
     let base = spawn_upstream(calls.clone()).await;
     let config = Config::from_toml_str(&format!(
         r#"
         router_model = "auto"
-        [router]
-        kind = "random"
-        seed = 1
 
         [[models]]
         id = "big"
@@ -207,7 +238,7 @@ async fn openai_router_model_is_routed_and_proxied() {
     assert_eq!(status, StatusCode::OK);
     let model = headers["x-opas-model"].to_str().unwrap();
     assert!(["big", "small", "openai-only"].contains(&model), "{model}");
-    assert_eq!(headers["x-opas-router"], "random");
+    assert_eq!(headers["x-opas-router"], "round-robin");
     assert!(headers.contains_key("x-opas-decision-id"));
 
     let body = json_body(&body);
@@ -359,7 +390,7 @@ async fn route_endpoint_returns_decision_without_calling_upstream() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let body = json_body(&body);
-    assert_eq!(body["router"], "random");
+    assert_eq!(body["router"], "round-robin");
     assert_eq!(body["api"], "anthropic_messages");
     let model = body["model"].as_str().unwrap();
     assert!(model == "big" || model == "small", "{model}");
@@ -421,7 +452,8 @@ async fn models_endpoint_lists_router_and_configured_models() {
 async fn cache_aware_routing_keeps_a_conversation_on_one_model() {
     let h = harness().await;
     // Ten independent conversations: each turn 2 must go to the model that served turn 1,
-    // even though the random choice would otherwise pick at random.
+    // even though the round-robin router would otherwise move it to the next model:
+    // the gateway recognizes the conversation and hands it to the router.
     for i in 0..10 {
         let first_user =
             json!({"role": "user", "content": format!("task {i}: refactor the parser")});
@@ -830,4 +862,66 @@ async fn prices_come_from_models_dev_for_operators_and_consumers() {
         .unwrap()
         .clone();
     assert!(x["expected_cost_usd"].as_f64() > y["expected_cost_usd"].as_f64());
+}
+
+#[tokio::test]
+async fn without_a_router_opas_is_a_plain_proxy() {
+    let h = harness_with(None).await;
+    assert!(h.gateway.router().is_none());
+
+    // `auto` is not offered.
+    let (_, _, body) = send(
+        &h.app,
+        Request::get("/v1/models").body(Body::empty()).unwrap(),
+    )
+    .await;
+    let ids: Vec<_> = json_body(&body)["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids, ["big", "small", "openai-only"]);
+
+    // Named models are proxied as usual.
+    let (status, headers, body) = send(
+        &h.app,
+        req(
+            "/v1/chat/completions",
+            json!({"model": "big", "messages": [{"role": "user", "content": "hi"}]}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-opas-model"], "big");
+    assert_eq!(json_body(&body)["model"], "big-upstream");
+
+    // The router model and the decision API need a router.
+    let (status, _, body) = send(
+        &h.app,
+        req(
+            "/v1/chat/completions",
+            json!({"model": "auto", "messages": [{"role": "user", "content": "hi"}]}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let msg = json_body(&body)["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(msg.contains("no router is configured"), "{msg}");
+    let (status, _, _) = send(
+        &h.app,
+        req(
+            "/v1/route",
+            json!({"api": "openai_chat", "request": {"model": "auto", "messages": []}}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(h.upstream_calls.load(Ordering::SeqCst), 1);
 }

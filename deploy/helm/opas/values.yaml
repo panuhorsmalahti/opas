@@ -14,12 +14,10 @@ fullnameOverride: ""
 
 # opas.toml, mounted at /etc/opas/opas.toml. `listen` is forced to 0.0.0.0:8080
 # by the container environment. See opas.example.toml in the repository for options.
+# The default runs a plain proxy (no [router]: clients name a model). For the probe
+# router add a [router] section and the encoder model volume below; docs/usage/helm.md
+# has a complete example.
 config: |
-  router_model = "auto"
-
-  [router]
-  kind = "random"
-
   [cache]
   ttl_secs = 300
 
@@ -101,7 +99,7 @@ securityContext:
   capabilities:
     drop: [ALL]
 
-# The random router needs little; the probe router runs a 9B encoder model on CPU
+# The plain proxy needs little; the probe router runs a 9B encoder model on CPU
 # (about 10 GiB of memory for Q8_0) unless the image is built with a GPU backend.
 resources:
   requests:

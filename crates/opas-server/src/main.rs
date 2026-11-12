@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen = config.listen.clone();
     let gateway = build_gateway(config)?;
     tracing::info!(
-        router = gateway.router().name(),
+        router = gateway.router().map_or("none (plain proxy)", |r| r.name()),
         router_model = %gateway.config().router_model,
         cache_aware = gateway.config().cache.enabled,
         models = ?gateway.config().models.iter().map(|m| &m.id).collect::<Vec<_>>(),
@@ -91,17 +91,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// The probe router needs the llama.cpp encoder (feature `probe`); other routers are
-/// built by the core crate.
+/// The probe router needs the llama.cpp encoder (feature `probe`). Without a `[router]`,
+/// opas runs as a plain proxy.
 fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> {
     match &config.router {
         #[cfg(feature = "probe")]
-        RouterConfig::Probe {
+        Some(RouterConfig::Probe {
             encoder_model,
             probe,
             weights,
             n_gpu_layers,
-        } => {
+        }) => {
             let untiered: Vec<&str> = config
                 .models
                 .iter()
@@ -117,9 +117,14 @@ fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> 
             Ok(Gateway::with_router(config, Arc::new(router)))
         }
         #[cfg(not(feature = "probe"))]
-        RouterConfig::Probe { .. } => {
+        Some(RouterConfig::Probe { .. }) => {
             Err("the probe router needs opas-server built with the `probe` feature".into())
         }
-        _ => Ok(Gateway::new(config)?),
+        None => {
+            tracing::warn!(
+                "no [router] configured: running as a plain proxy (requests must name a model)"
+            );
+            Ok(Gateway::new(config)?)
+        }
     }
 }

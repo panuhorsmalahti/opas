@@ -17,16 +17,25 @@ serde_json = "1"
 | `opas` with `gateway` | Forwarding requests to providers (`Gateway`) |
 | `opas-encoder` | Running the encoder model in-process (`Encoder`) and the activation-probe router (`ProbeRouter`) |
 
-## 1. Decide which model to use
+## 1. Decide which model to use: `ProbeRouter`
 
-Parse the request, describe your models by tier, and ask a router:
+Parse the request, describe your models by tier, and ask the probe router. It needs the
+encoder model and the trained predictor (included in the repo):
 
 ```rust
-use opas::{ApiFormat, Candidate, RandomRouter, Pricing, RouteRequest, Router, Tier};
+use opas::{ApiFormat, Candidate, Pricing, RouteRequest, Router, Tier, Weights};
+use opas_encoder::ProbeRouter;
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let router = ProbeRouter::load(
+        "models/gguf/Qwen3.5-9B-Q8_0.gguf",          // encoder model
+        "probes/llmrouterbench-qwen35-9b.json",      // predictor, included in the repo
+        Weights::default(),                          // quality 60 / speed 20 / cost 20
+        -1,                                          // encoder layers on the GPU (-1 = all)
+    )?;
+
     let body = json!({"model": "auto", "messages": [{"role": "user", "content": "Explain monads"}]});
     let request = RouteRequest::from_json(ApiFormat::OpenaiChat, &body)?;
 
@@ -34,10 +43,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Candidate::new("my-haiku").with_tier(Some(Tier::Small)),
         Candidate::new("my-opus")
             .with_tier(Some(Tier::Large))
-            .with_pricing(Some(Pricing { input: 4.0, cached_input: 0.2, output: 20.0 })),
+            .with_pricing(Some(Pricing { input: 4.0, cached_input: 0.2, output: 20.0, long_context: None })),
     ];
 
-    let decision = RandomRouter::new().route(&request, &candidates).await?;
+    let decision = router.route(&request, &candidates).await?;
     println!("{} ({})", decision.model, decision.reason);
     Ok(())
 }
@@ -45,23 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `RouteRequest::from_json` accepts `ApiFormat::OpenaiChat`, `AnthropicMessages`,
 `OpenResponses` and `GeminiInteractions` bodies.
-
-## 2. Route with activations: `ProbeRouter`
-
-The probe router needs the encoder model and a trained probe file (see "Training the
-probe" in the main README):
-
-```rust
-use opas_encoder::ProbeRouter;
-
-let router = ProbeRouter::load(
-    "models/gguf/Qwen3.5-9B-Q8_0.gguf",              // encoder model
-    "probes/llmrouterbench-qwen35-9b.json",          // predictor, included in the repo
-    opas::Weights::default(),                        // quality 60 / speed 20 / cost 20
-    -1,                                              // encoder layers on the GPU (-1 = all)
-)?;
-let decision = router.route(&request, &candidates).await?;
-```
 
 **Loading and threading:** loading takes a few seconds. `ProbeRouter` is cheap to clone,
 and it runs the encoder on a blocking thread, so it is safe to call from async code.
@@ -78,7 +70,7 @@ the three 0–1 scores and the weighted `score`.
 **Without the async trait:** `estimate_blocking(&request, &candidates)` returns the scored
 estimates, best first.
 
-## 3. Cache-aware routing in your own loop
+## 2. Cache-aware routing in your own loop
 
 Without the `Gateway`, keep a `ConversationTracker` yourself:
 
@@ -95,12 +87,11 @@ let decision = router.route(&request, &candidates).await?;
 tracker.record(&keys, &decision.model);               // so the next turn finds it
 ```
 
-Routers see `request.conversation`:
+Routers see `request.conversation`. The probe router bills the cached prefix at the
+cached price for the previous model only, so it switches models only when the expected
+gain outweighs the lost cache.
 
-- The random router stays on the previous model.
-- The probe router bills the cached prefix at the cached price for that model only.
-
-## 4. Route and forward: `Gateway`
+## 3. Route and forward: `Gateway`
 
 `Gateway` is what the server runs. It loads the config, routes, tracks conversations and
 provider-stored ids, and forwards to the upstream over HTTP:
@@ -111,9 +102,9 @@ use opas::gateway::Gateway;
 use opas::{ApiFormat, Config};
 
 let config = Config::load("opas.toml")?;
-let gateway = Gateway::new(config)?;                        // random router from the config
-// or, with the probe router:
-// let gateway = Gateway::with_router(config, Arc::new(router));
+let gateway = Gateway::with_router(config, Arc::new(router)); // the ProbeRouter from step 1
+// or a plain proxy (requests must name a model; the config must have no [router]):
+// let gateway = Gateway::new(config)?;
 
 let forwarded = gateway
     .forward(ApiFormat::OpenResponses, body, &http::HeaderMap::new())
@@ -138,7 +129,7 @@ models.dev, then tier defaults. Load the catalog with `gateway.refresh_prices().
 `gateway.set_catalog(PriceCatalog::from_models_dev(&json))`. Per-request prices go in
 `RequestOptions::pricing`, passed to `decide_with`.
 
-## 5. Your own routing logic
+## 4. Your own routing logic
 
 Implement `Router` and plug it into the `Gateway`:
 
@@ -162,12 +153,14 @@ impl Router for LengthRouter {
             model: pick.id.clone(),
             reason: format!("prompt ≈ {} tokens", req.estimated_tokens()),
             conversation: None,
+            estimates: vec![],
+            weights: None,
         })
     }
 }
 ```
 
-## 6. Raw activations: `Encoder`
+## 5. Raw activations: `Encoder`
 
 To use the encoder's hidden states for your own analysis or training:
 

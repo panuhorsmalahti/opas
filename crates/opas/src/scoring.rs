@@ -2,7 +2,11 @@
 //!
 //! Each candidate gets three scores in 0..1, then a weighted average:
 //!
-//! - **quality** = the predicted probability of success;
+//! - **quality** = the predicted probability of success relative to the most likely
+//!   candidate (p / max p): 1 for the best, proportionally less for the others. On hard
+//!   prompts the tiers differ a lot and this term dominates; on easy prompts everyone is
+//!   near 1 and cost and speed decide. (Absolute p made `balanced` send 85% of
+//!   LLMRouterBench prompts to the smallest tier; see docs/probe-results.md.)
 //! - **cost** = 1 for the cheapest candidate, falling on a log scale to 0 at
 //!   [`COST_RANGE`]× the cheapest;
 //! - **speed** = 1 for the fastest predicted response time, falling on a log scale to 0
@@ -167,7 +171,7 @@ pub struct Estimate {
     /// served the previous turn).
     #[serde(default)]
     pub cached_prompt_tokens: u64,
-    /// Quality score (= p_success).
+    /// Quality score: p_success relative to the best candidate (1 for the best).
     #[serde(default)]
     pub quality_score: f64,
     /// Speed score: 1 for the fastest candidate, 0 at TIME_RANGE× slower.
@@ -201,8 +205,16 @@ pub fn score(estimates: &mut [Estimate], weights: Weights) {
     };
     let min_cost = positive_min(|e| e.expected_cost_usd);
     let min_time = positive_min(|e| e.expected_response_time_s);
+    let max_p = estimates
+        .iter()
+        .map(|e| e.p_success.clamp(0.0, 1.0))
+        .fold(0.0, f64::max);
     for e in estimates.iter_mut() {
-        e.quality_score = e.p_success.clamp(0.0, 1.0);
+        e.quality_score = if max_p > 0.0 {
+            e.p_success.clamp(0.0, 1.0) / max_p
+        } else {
+            1.0
+        };
         e.cost_score = log_score(e.expected_cost_usd, min_cost, COST_RANGE);
         e.speed_score = log_score(e.expected_response_time_s, min_time, TIME_RANGE);
         e.score = w.quality * e.quality_score + w.speed * e.speed_score + w.cost * e.cost_score;
@@ -245,8 +257,8 @@ mod tests {
         assert_eq!(pick(Preference::Quality.weights()), "large");
         assert_eq!(pick(Preference::Cost.weights()), "small");
         assert_eq!(pick(Preference::Speed.weights()), "small");
-        // Balanced (60/20/20): small 0.27 + 0.40 = 0.67; medium 0.48 + 0.10 + 0.10 = 0.68;
-        // large 0.53 + 0.04 + 0.04 = 0.61. A 35-point quality gain beats 10x cost and 3x time.
+        // Balanced (60/20/20), quality relative to the best (0.88): small 0.6·0.51 + 0.4 =
+        // 0.71; medium 0.6·0.91 + 0.10 + 0.10 = 0.75; large 0.6 + 0.04 + 0.04 = 0.68.
         assert_eq!(pick(Preference::Balanced.weights()), "medium");
     }
 
@@ -269,11 +281,42 @@ mod tests {
             (by("b").speed_score - 0.5).abs() < 1e-6,
             "sqrt(10)x of a 10x range = half"
         );
-        assert!((by("a").quality_score - 0.5).abs() < 1e-12);
+        assert!(
+            (by("a").quality_score - 1.0).abs() < 1e-12,
+            "equal p: all are the best"
+        );
         // Small differences do not swing the decision: a 5% cheaper model scores ~0.01 higher.
         let mut close = vec![est("x", 0.5, 0.0100, 1.0), est("y", 0.5, 0.0105, 1.0)];
         score(&mut close, Weights::new(0.0, 0.0, 1.0));
         assert!(close[0].score - close[1].score < 0.011);
+    }
+
+    #[test]
+    fn quality_is_relative_to_the_best_candidate() {
+        // Hard prompt: small 25%, xlarge 74%. Balanced weights must not pick small just
+        // because it is cheap and fast.
+        let mut hard = vec![
+            est("small", 0.25, 0.0005, 2.0),
+            est("xlarge", 0.74, 0.04, 20.0),
+        ];
+        score(&mut hard, Preference::Balanced.weights());
+        assert!(
+            (hard
+                .iter()
+                .find(|e| e.model == "small")
+                .unwrap()
+                .quality_score
+                - 0.25 / 0.74)
+                .abs()
+                < 1e-12
+        );
+        // Easy prompt: 91% vs 99%: cheap and fast wins.
+        let mut easy = vec![
+            est("small", 0.91, 0.0005, 2.0),
+            est("xlarge", 0.99, 0.04, 20.0),
+        ];
+        score(&mut easy, Preference::Balanced.weights());
+        assert_eq!(easy[0].model, "small");
     }
 
     #[test]
