@@ -1,5 +1,5 @@
 """Reference implementation (Python, MLX, Apple Silicon only) of the Rust encoder's
-prefill activation extraction. Used to cross-check `opastin-encoder`; not used at runtime.
+prefill activation extraction. Used to cross-check `opas-encoder`; not used at runtime.
 
 Extract prefill activations from a local LLM, without generating any tokens.
 

@@ -6,7 +6,7 @@ the routing latency.
 
 ## Measured prefill time, Qwen3.5-9B Q8_0
 
-Measured on an M3 Pro (Apple Silicon, 36 GB) with `opastin-encode`:
+Measured on an M3 Pro (Apple Silicon, 36 GB) with `opas-encode`:
 
 | Backend | 20-token prompt | ~50-token prompt | 531-token prompt |
 |---|---|---|---|
@@ -36,7 +36,7 @@ GPU, or make the CPU job much smaller (see "Options" below).
 | Setup | Encoder speed | Notes |
 |---|---|---|
 | **NVIDIA GPU, CUDA image** | fastest | `docker build -f Dockerfile.cuda`. Run with `--gpus all`, or in Kubernetes on GPU nodes (`gpu.enabled=true` in the Helm chart). Untested in this repository's CI: there are no GPU runners. |
-| **Apple Silicon, bare metal** | fast | Run the `opastin` binary natively (no container) on a Mac mini / Mac Studio / Mac Pro; Metal is used automatically. Put a Kubernetes service in front if needed (an `ExternalName` Service, or a Service with manual Endpoints pointing at the Mac). |
+| **Apple Silicon, bare metal** | fast | Run the `opas` binary natively (no container) on a Mac mini / Mac Studio / Mac Pro; Metal is used automatically. Put a Kubernetes service in front if needed (an `ExternalName` Service, or a Service with manual Endpoints pointing at the Mac). |
 | **CPU, tuned** | 5–20× slower than GPU | Fine for batch or offline work, or low-volume traffic with short prompts. See the tuning below. |
 | **Split deployment** | — | Run the random or proxy-only server (`--no-default-features`, tiny) where clients are, and the probe router only on GPU hosts. Clients can also use `/v1/route` there and call providers themselves. |
 
@@ -47,7 +47,7 @@ repository:
   (experimental).
 - `rocm`: AMD GPUs.
 
-Build them with `cargo build --release -p opastin-server --features vulkan` (or `rocm`).
+Build them with `cargo build --release -p opas-server --features vulkan` (or `rocm`).
 
 ## Making CPU inference cheaper
 

@@ -1,20 +1,20 @@
-# Plain Kubernetes manifests for opastin (random router, no local models).
-#   kubectl create namespace opastin
-#   kubectl -n opastin create secret generic opastin-api-keys --from-literal=ANTHROPIC_API_KEY=...
-#   kubectl apply -n opastin -k deploy/kubernetes
+# Plain Kubernetes manifests for opas (random router, no local models).
+#   kubectl create namespace opas
+#   kubectl -n opas create secret generic opas-api-keys --from-literal=ANTHROPIC_API_KEY=...
+#   kubectl apply -n opas -k deploy/kubernetes
 # For the activation-probe router (model volume, GPU/CPU sizing) use the Helm chart.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 labels:
   - pairs:
-      app.kubernetes.io/name: opastin
-      app.kubernetes.io/part-of: opastin
+      app.kubernetes.io/name: opas
+      app.kubernetes.io/part-of: opas
     includeSelectors: true
 resources:
   - configmap.yaml
   - deployment.yaml
   - service.yaml
 images:
-  - name: opastin
-    newName: ghcr.io/OWNER/opastin
+  - name: opas
+    newName: ghcr.io/OWNER/opas
     newTag: latest

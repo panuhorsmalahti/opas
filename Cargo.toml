@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/opastin", "crates/opastin-server", "crates/opastin-encoder"]
+members = ["crates/opas", "crates/opas-server", "crates/opas-encoder"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 rust-version = "1.80"
 
 [workspace.dependencies]

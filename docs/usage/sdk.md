@@ -1,28 +1,28 @@
-# Using opastin as a Rust SDK
+# Using opas as a Rust SDK
 
 The crates can be used as libraries, without running the server. The crates are not
 published to crates.io yet, so depend on them by path or git:
 
 ```toml
 [dependencies]
-opastin = { git = "https://github.com/OWNER/opastin", features = ["gateway"] }
-opastin-encoder = { git = "https://github.com/OWNER/opastin" }  # probe router; builds llama.cpp (cmake)
+opas = { git = "https://github.com/OWNER/opas", features = ["gateway"] }
+opas-encoder = { git = "https://github.com/OWNER/opas" }  # probe router; builds llama.cpp (cmake)
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde_json = "1"
 ```
 
 | Crate | Use it for |
 |---|---|
-| `opastin` | Parsing requests in four APIs, the `Router` trait, tiers, cache-aware conversation tracking, configuration |
-| `opastin` with `gateway` | Forwarding requests to providers (`Gateway`) |
-| `opastin-encoder` | Running the encoder model in-process (`Encoder`) and the activation-probe router (`ProbeRouter`) |
+| `opas` | Parsing requests in four APIs, the `Router` trait, tiers, cache-aware conversation tracking, configuration |
+| `opas` with `gateway` | Forwarding requests to providers (`Gateway`) |
+| `opas-encoder` | Running the encoder model in-process (`Encoder`) and the activation-probe router (`ProbeRouter`) |
 
 ## 1. Decide which model to use
 
 Parse the request, describe your models by tier, and ask a router:
 
 ```rust
-use opastin::{ApiFormat, Candidate, RandomRouter, Pricing, RouteRequest, Router, Tier};
+use opas::{ApiFormat, Candidate, RandomRouter, Pricing, RouteRequest, Router, Tier};
 use serde_json::json;
 
 #[tokio::main]
@@ -52,7 +52,7 @@ The probe router needs the encoder model and a trained probe file (see "Training
 probe" in the main README):
 
 ```rust
-use opastin_encoder::ProbeRouter;
+use opas_encoder::ProbeRouter;
 
 let router = ProbeRouter::load(
     "models/gguf/Qwen3.5-9B-Q8_0.gguf",              // encoder model
@@ -78,7 +78,7 @@ Without the `Gateway`, keep a `ConversationTracker` yourself:
 
 ```rust
 use std::time::Duration;
-use opastin::conversation::{ConversationTracker, PrefixKeys};
+use opas::conversation::{ConversationTracker, PrefixKeys};
 
 let tracker = ConversationTracker::new(Duration::from_secs(300), 100_000);
 
@@ -101,10 +101,10 @@ provider-stored ids, and forwards to the upstream over HTTP:
 
 ```rust
 use std::sync::Arc;
-use opastin::gateway::Gateway;
-use opastin::{ApiFormat, Config};
+use opas::gateway::Gateway;
+use opas::{ApiFormat, Config};
 
-let config = Config::load("opastin.toml")?;
+let config = Config::load("opas.toml")?;
 let gateway = Gateway::new(config)?;                        // random router from the config
 // or, with the probe router:
 // let gateway = Gateway::with_router(config, Arc::new(router));
@@ -130,7 +130,7 @@ Implement `Router` and plug it into the `Gateway`:
 
 ```rust
 use async_trait::async_trait;
-use opastin::{Candidate, Decision, RouteError, RouteRequest, Router, Tier};
+use opas::{Candidate, Decision, RouteError, RouteRequest, Router, Tier};
 
 struct LengthRouter;
 
@@ -158,7 +158,7 @@ impl Router for LengthRouter {
 To use the encoder's hidden states for your own analysis or training:
 
 ```rust
-use opastin_encoder::{Encoder, EncoderConfig};
+use opas_encoder::{Encoder, EncoderConfig};
 
 let mut enc = Encoder::load("models/gguf/Qwen3.5-9B-Q8_0.gguf", EncoderConfig {
     layers: Some(vec![16, 24]),   // hidden-state indices to capture (None = all)
@@ -170,10 +170,10 @@ let acts = enc.encode_request(&request)?;
 ```
 
 `Encoder` is `Send`, not `Sync`: wrap it in a `Mutex` to share it. The
-`opastin-encode` CLI writes the same activations to `.npy` files for batch jobs.
+`opas-encode` CLI writes the same activations to `.npy` files for batch jobs.
 
 ## Examples in the repository
 
-- `cargo run -p opastin --example decide`
-- `cargo run -p opastin --features gateway --example gateway -- opastin.toml`
-- `cargo run --release -p opastin-encoder --example overhead -- models/gguf/Qwen3.5-0.8B-Q8_0.gguf`
+- `cargo run -p opas --example decide`
+- `cargo run -p opas --features gateway --example gateway -- opas.toml`
+- `cargo run --release -p opas-encoder --example overhead -- models/gguf/Qwen3.5-0.8B-Q8_0.gguf`

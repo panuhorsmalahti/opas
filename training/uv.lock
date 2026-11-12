@@ -309,7 +309,7 @@ wheels = [
 ]
 
 [[package]]
-name = "opastin-training"
+name = "opas-training"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

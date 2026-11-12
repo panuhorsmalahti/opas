@@ -1,0 +1,35 @@
+[package]
+name = "opas"
+description = "Model routing for LLM requests: pick a model per request, use it in-process or behind an OpenAI/Anthropic-compatible gateway"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# HTTP forwarding to upstream providers (used by opas-server, also usable in-process).
+gateway = ["dep:reqwest", "dep:http"]
+
+[dependencies]
+async-trait.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+http = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+
+[[example]]
+name = "decide"
+
+[[example]]
+name = "gateway"
+required-features = ["gateway"]

@@ -1,17 +1,17 @@
-# opastin documentation
+# opas documentation
 
-## Using opastin
+## Using opas
 
 | Guide | When to read it |
 |---|---|
-| [HTTP API](usage/api.md) | Calling opastin from any language: the proxy endpoints, existing OpenAI / Anthropic / Gemini SDKs, the decision-only `/v1/route` |
+| [HTTP API](usage/api.md) | Calling opas from any language: the proxy endpoints, existing OpenAI / Anthropic / Gemini SDKs, the decision-only `/v1/route` |
 | [Rust SDK](usage/sdk.md) | Embedding the router in a Rust program: decisions, forwarding, custom routers, the probe router |
 | [Docker](usage/docker.md) | Running the server in a container, with or without the activation-probe router |
 | [Kubernetes](usage/kubernetes.md) | Plain manifests (Kustomize) |
 | [Helm](usage/helm.md) | The Helm chart: values, secrets, model storage, upgrades |
 | [Hardware](usage/hardware.md) | Where to run the probe router's encoder: GPU, Apple Silicon, CPU tuning, measured latency |
 
-All of them use the same configuration file. [opastin.example.toml](../opastin.example.toml)
+All of them use the same configuration file. [opas.example.toml](../opas.example.toml)
 documents every option, and the [main README](../README.md) explains how routing works.
 
 ## Design and research

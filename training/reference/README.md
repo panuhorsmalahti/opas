@@ -1,6 +1,6 @@
 # Reference extractor (Python, MLX)
 
-An independent Python implementation of what `opastin-encoder` does in Rust: one
+An independent Python implementation of what `opas-encoder` does in Rust: one
 prefill pass of a Qwen3.5 model, capturing the hidden state after every layer. It is
 used only to cross-check the Rust encoder. Nothing at runtime uses it.
 
@@ -15,7 +15,7 @@ It needs Apple Silicon (MLX) and the 0.8B models in `models/`:
 ```sh
 cd training
 uv run --group reference reference/selfcheck.py      # manual layer loop == model forward
-../target/release/opastin-encode --model ../models/gguf/Qwen3.5-0.8B-Q8_0.gguf --demo --out out/rust-0.8b
+../target/release/opas-encode --model ../models/gguf/Qwen3.5-0.8B-Q8_0.gguf --demo --out out/rust-0.8b
 uv run --group reference reference/extract.py --demo --out out/py-0.8b.npz
 uv run --group reference reference/compare.py out/rust-0.8b out/py-0.8b.npz
 ```

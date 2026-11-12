@@ -1,6 +1,6 @@
-# Using opastin over HTTP
+# Using opas over HTTP
 
-opastin speaks four LLM APIs. Clients keep their existing SDK and change only the base
+opas speaks four LLM APIs. Clients keep their existing SDK and change only the base
 URL. Every example below assumes the server runs at `http://localhost:8080`; see
 [Docker](docker.md), [Kubernetes](kubernetes.md) or [Helm](helm.md) for running it.
 
@@ -14,7 +14,7 @@ The `model` field in a request decides what happens:
 | a configured model id, e.g. `claude-haiku-5-5` | Sent straight to that model, with no routing decision |
 | anything else | `404`, in the API's error format |
 
-opastin rewrites `model` to the upstream model name (`upstream_model` in the config, or
+opas rewrites `model` to the upstream model name (`upstream_model` in the config, or
 the id) before forwarding. Responses, including SSE streams, are passed through unchanged.
 
 ## Credentials
@@ -71,7 +71,7 @@ message = client.messages.create(
 )
 ```
 
-Coding agents that accept a custom Anthropic base URL can be pointed at opastin the same
+Coding agents that accept a custom Anthropic base URL can be pointed at opas the same
 way, with the model set to `auto`.
 
 ## Gemini Interactions API: `POST /v1beta/interactions` (or `/v1/interactions`)
@@ -92,15 +92,15 @@ interaction, just like `previous_response_id`.
 
 | Header | When | Meaning |
 |---|---|---|
-| `x-opastin-model` | always | Configured model id that served the request |
-| `x-opastin-router` | routed requests | `random`, `probe`, or `affinity` (pinned by stored provider state) |
-| `x-opastin-decision-id` | routed requests | Unique id of the decision, for logs and outcome feedback |
-| `x-opastin-previous-model` | continued conversations | Model that served the previous turn (cache-aware routing recognized the conversation) |
+| `x-opas-model` | always | Configured model id that served the request |
+| `x-opas-router` | routed requests | `random`, `probe`, or `affinity` (pinned by stored provider state) |
+| `x-opas-decision-id` | routed requests | Unique id of the decision, for logs and outcome feedback |
+| `x-opas-previous-model` | continued conversations | Model that served the previous turn (cache-aware routing recognized the conversation) |
 
 ## Multi-turn conversations and caching
 
 Nothing special is needed: send each turn with the full history, as these APIs expect.
-opastin fingerprints the history and recognizes the conversation. The router then knows
+opas fingerprints the history and recognizes the conversation. The router then knows
 which model's prompt cache is warm:
 
 - The random router stays on that model.

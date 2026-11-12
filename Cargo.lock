@@ -858,7 +858,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "opastin"
+name = "opas"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -875,13 +875,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "opastin-encoder"
+name = "opas-encoder"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "clap",
  "llama-cpp-sys-2",
- "opastin",
+ "opas",
  "serde",
  "serde_json",
  "thiserror",
@@ -890,7 +890,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "opastin-server"
+name = "opas-server"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -898,8 +898,8 @@ dependencies = [
  "clap",
  "futures-util",
  "http-body-util",
- "opastin",
- "opastin-encoder",
+ "opas",
+ "opas-encoder",
  "serde",
  "serde_json",
  "tokio",

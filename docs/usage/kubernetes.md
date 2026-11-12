@@ -1,10 +1,10 @@
-# Running opastin on Kubernetes (plain manifests)
+# Running opas on Kubernetes (plain manifests)
 
 `deploy/kubernetes/` is a Kustomize base containing:
 
 - a Deployment;
 - a ClusterIP Service;
-- a ConfigMap with `opastin.toml`.
+- a ConfigMap with `opas.toml`.
 
 It runs the random router. For the probe router, GPU nodes and model storage, the
 [Helm chart](helm.md) has the options built in.
@@ -12,11 +12,11 @@ It runs the random router. For the probe router, GPU nodes and model storage, th
 ## Install
 
 ```sh
-kubectl create namespace opastin
-kubectl -n opastin create secret generic opastin-api-keys \
+kubectl create namespace opas
+kubectl -n opas create secret generic opas-api-keys \
   --from-literal=ANTHROPIC_API_KEY=sk-ant-...
-kubectl -n opastin apply -k deploy/kubernetes
-kubectl -n opastin rollout status deploy/opastin
+kubectl -n opas apply -k deploy/kubernetes
+kubectl -n opas rollout status deploy/opas
 ```
 
 The Secret is optional (`optional: true`). Without it, clients' own credentials are
@@ -30,36 +30,36 @@ Make an overlay rather than editing the base:
 # my-overlay/kustomization.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: opastin
+namespace: opas
 resources:
   - ../deploy/kubernetes
 images:
-  - name: opastin
-    newName: ghcr.io/OWNER/opastin
+  - name: opas
+    newName: ghcr.io/OWNER/opas
     newTag: "0.1.0"
 configMapGenerator:
-  - name: opastin-config
+  - name: opas-config
     behavior: replace
     files:
-      - opastin.toml
+      - opas.toml
 ```
 
 ```sh
 kubectl apply -k my-overlay
 ```
 
-After changing the ConfigMap, restart the pods: `kubectl -n opastin rollout restart
-deploy/opastin`. The config is read at startup.
+After changing the ConfigMap, restart the pods: `kubectl -n opas rollout restart
+deploy/opas`. The config is read at startup.
 
 ## Use it from inside the cluster
 
 ```text
-http://opastin.opastin.svc.cluster.local/v1          # OpenAI SDKs, Open Responses
-http://opastin.opastin.svc.cluster.local             # Anthropic SDKs
-http://opastin.opastin.svc.cluster.local/v1beta      # Gemini Interactions
+http://opas.opas.svc.cluster.local/v1          # OpenAI SDKs, Open Responses
+http://opas.opas.svc.cluster.local             # Anthropic SDKs
+http://opas.opas.svc.cluster.local/v1beta      # Gemini Interactions
 ```
 
-To try it from your machine: `kubectl -n opastin port-forward svc/opastin 8080:80`.
+To try it from your machine: `kubectl -n opas port-forward svc/opas 8080:80`.
 
 ## Scaling and state
 
@@ -99,18 +99,18 @@ hosts outside the cluster, and expose them as a Service with manual Endpoints:
 ```yaml
 apiVersion: v1
 kind: Service
-metadata: {name: opastin-probe, namespace: opastin}
+metadata: {name: opas-probe, namespace: opas}
 spec:
   ports: [{name: http, port: 80, targetPort: 8080}]
 ---
 apiVersion: discovery.k8s.io/v1
 kind: EndpointSlice
 metadata:
-  name: opastin-probe-1
-  namespace: opastin
-  labels: {kubernetes.io/service-name: opastin-probe}
+  name: opas-probe-1
+  namespace: opas
+  labels: {kubernetes.io/service-name: opas-probe}
 addressType: IPv4
 ports: [{name: http, port: 8080}]
 endpoints:
-  - addresses: ["10.0.0.42"]     # the Mac running `opastin --config opastin.toml`
+  - addresses: ["10.0.0.42"]     # the Mac running `opas --config opas.toml`
 ```

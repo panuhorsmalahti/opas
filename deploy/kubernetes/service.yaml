@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: opastin
+  name: opas
 spec:
   selector: {}
   # Cache-aware routing state lives in each pod; keep a client on one pod.

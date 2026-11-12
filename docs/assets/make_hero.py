@@ -1,4 +1,4 @@
-"""Generate docs/assets/opastin-hero.svg, the README header image.
+"""Generate docs/assets/opas-hero.svg, the README header image.
 
 Run: python3 docs/assets/make_hero.py   (standard library only)
 """
@@ -8,7 +8,7 @@ import random
 from pathlib import Path
 
 W, H = 1600, 760
-OUT = Path(__file__).with_name("opastin-hero.svg")
+OUT = Path(__file__).with_name("opas-hero.svg")
 FONT = "Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
 MONO = "'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace"
 
@@ -57,10 +57,10 @@ def arrow(x1, y1, x2, y2, bend=0.0):
 # --- document, defs, background --------------------------------------------------------
 add(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
     f'role="img" aria-labelledby="t d">')
-add('<title id="t">opastin: routing LLM requests on model activations</title>')
+add('<title id="t">opas: routing LLM requests on model activations</title>')
 add('<desc id="d">A request in any of four APIs goes through one prefill pass of an encoder LLM; '
     'the hidden state of one layer feeds a linear probe that predicts success and cost per model tier; '
-    'opastin routes to the tier with the best success minus lambda times cost.</desc>')
+    'opas routes to the tier with the best success minus lambda times cost.</desc>')
 add(f"""<defs>
   <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
     <stop offset="0" stop-color="{BG0}"/><stop offset="1" stop-color="{BG1}"/>
@@ -110,8 +110,8 @@ add(f'<rect width="{W}" height="{H}" rx="28" fill="url(#glowA)"/>')
 add(f'<rect width="{W}" height="{H}" rx="28" fill="url(#glowB)"/>')
 
 # --- title ---------------------------------------------------------------------------
-text(56, 82, "opastin", 46, TEXT, 800, extra='letter-spacing="-1"')
-text(258, 82, "route every LLM request by reading a model's activations", 22, MUTED, 400)
+text(56, 82, "opas", 46, TEXT, 800, extra='letter-spacing="-1"')
+text(176, 82, "route every LLM request by reading a model's activations", 22, MUTED, 400)
 text(56, 116, "one prefill pass · no tokens generated · a linear probe predicts success and cost per tier",
      16, FAINT, 400)
 

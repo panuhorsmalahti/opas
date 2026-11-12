@@ -1,20 +1,20 @@
-# Installing opastin with Helm
+# Installing opas with Helm
 
-The chart is in `deploy/helm/opastin`.
+The chart is in `deploy/helm/opas`.
 
 ## Install
 
 ```sh
-kubectl create namespace opastin
-kubectl -n opastin create secret generic opastin-api-keys --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+kubectl create namespace opas
+kubectl -n opas create secret generic opas-api-keys --from-literal=ANTHROPIC_API_KEY=sk-ant-...
 
-helm install opastin deploy/helm/opastin -n opastin \
-  --set image.repository=ghcr.io/OWNER/opastin \
-  --set apiKeys.existingSecret=opastin-api-keys \
-  --set-file config=opastin.toml
+helm install opas deploy/helm/opas -n opas \
+  --set image.repository=ghcr.io/OWNER/opas \
+  --set apiKeys.existingSecret=opas-api-keys \
+  --set-file config=opas.toml
 ```
 
-`--set-file config=...` uses your own `opastin.toml`; without it the chart's example
+`--set-file config=...` uses your own `opas.toml`; without it the chart's example
 config is used (random choice between two Claude models). After the install, `helm status`
 prints how to try it with a port-forward.
 
@@ -22,8 +22,8 @@ prints how to try it with a port-forward.
 
 | Value | Default | Purpose |
 |---|---|---|
-| `image.repository`, `image.tag` | `ghcr.io/OWNER/opastin`, chart appVersion | Image. Use the `Dockerfile.cuda` build for GPU nodes |
-| `config` | example TOML | The full `opastin.toml`. Changing it rolls the pods (checksum annotation) |
+| `image.repository`, `image.tag` | `ghcr.io/OWNER/opas`, chart appVersion | Image. Use the `Dockerfile.cuda` build for GPU nodes |
+| `config` | example TOML | The full `opas.toml`. Changing it rolls the pods (checksum annotation) |
 | `apiKeys.existingSecret` | `""` | Secret whose keys become environment variables (the names in `api_key_env`) |
 | `apiKeys.values` | `{}` | Or let the chart create that Secret from these values |
 | `replicaCount` | `1` | See "Scaling" below |
@@ -44,10 +44,10 @@ prints how to try it with a port-forward.
 ```yaml
 # values-probe-gpu.yaml
 image:
-  repository: ghcr.io/OWNER/opastin
+  repository: ghcr.io/OWNER/opas
   tag: cuda                       # built from Dockerfile.cuda
 apiKeys:
-  existingSecret: opastin-api-keys
+  existingSecret: opas-api-keys
 gpu:
   enabled: true
 nodeSelector:
@@ -85,7 +85,7 @@ config: |
 ```
 
 ```sh
-helm upgrade --install opastin deploy/helm/opastin -n opastin -f values-probe-gpu.yaml
+helm upgrade --install opas deploy/helm/opas -n opas -f values-probe-gpu.yaml
 ```
 
 **First start:**
@@ -114,10 +114,10 @@ Routing state (cache-aware conversation tracking, and affinity for
 ## Upgrade and uninstall
 
 ```sh
-helm upgrade opastin deploy/helm/opastin -n opastin -f my-values.yaml
-helm uninstall opastin -n opastin
+helm upgrade opas deploy/helm/opas -n opas -f my-values.yaml
+helm uninstall opas -n opas
 ```
 
 The models PVC is annotated `helm.sh/resource-policy: keep`, so uninstalling keeps the
 downloaded models. Delete it yourself when you no longer need it:
-`kubectl -n opastin delete pvc opastin-models`.
+`kubectl -n opas delete pvc opas-models`.

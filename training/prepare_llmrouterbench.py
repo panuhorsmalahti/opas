@@ -8,7 +8,7 @@ API models, each answer with a score and its USD cost.
 Writes, under data/llmrouterbench/:
   labels.jsonl   one line per prompt: id, dataset, prompt, and per model
                  {"score": 0|0.5|1, "cost": USD, "out_tokens": int}
-  sample.jsonl   a stratified sample of prompts in opastin-encode's input format
+  sample.jsonl   a stratified sample of prompts in opas-encode's input format
 
 Usage: uv run prepare_llmrouterbench.py [--per-dataset 600] [--seed 0]
 """

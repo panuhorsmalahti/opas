@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: opastin-config
+  name: opas-config
 data:
-  opastin.toml: |
-    # See opastin.example.toml for all options.
+  opas.toml: |
+    # See opas.example.toml for all options.
     listen = "0.0.0.0:8080"
     router_model = "auto"
 

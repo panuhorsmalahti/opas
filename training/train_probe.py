@@ -1,8 +1,8 @@
-"""Train opastin's tier probe on LLMRouterBench activations and evaluate it as a router.
+"""Train opas's tier probe on LLMRouterBench activations and evaluate it as a router.
 
 Inputs (see README "Training the probe"):
   data/llmrouterbench/labels.jsonl   from prepare_llmrouterbench.py
-  data/llmrouterbench/acts-9b/       from `opastin-encode --input sample.jsonl --out ...`
+  data/llmrouterbench/acts-9b/       from `opas-encode --input sample.jsonl --out ...`
 
 The probe predicts per capability tier (small / medium / large / xlarge), not per named
 model, so deployments map their own models onto tiers:
@@ -346,7 +346,7 @@ def main():
         return {"w": [float(x) for x in np.asarray(w, dtype=np.float32)], "b": float(b)}
 
     probe_file = {
-        "format": "opastin-probe/2",
+        "format": "opas-probe/2",
         "encoder": {
             "layer": int(best_layer), "pooling": best_pool, "thinking": bool(meta["thinking"]),
             "max_tokens": int(meta["max_tokens"]), "n_embd": int(last.shape[2]),

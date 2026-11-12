@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: opastin
+  name: opas
 spec:
   replicas: 1
   selector:
@@ -15,19 +15,19 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: opastin
-          image: opastin
-          args: ["--config", "/etc/opastin/opastin.toml"]
+        - name: opas
+          image: opas
+          args: ["--config", "/etc/opas/opas.toml"]
           ports:
             - name: http
               containerPort: 8080
           envFrom:
             - secretRef:
-                name: opastin-api-keys
+                name: opas-api-keys
                 optional: true
           volumeMounts:
             - name: config
-              mountPath: /etc/opastin
+              mountPath: /etc/opas
               readOnly: true
           readinessProbe:
             httpGet:
@@ -53,4 +53,4 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: opastin-config
+            name: opas-config

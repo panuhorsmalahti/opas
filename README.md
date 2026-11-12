@@ -1,11 +1,11 @@
-# opastin
+# opas
 
 <p align="center">
-  <img src="docs/assets/opastin-hero.svg" alt="opastin: a request in any of four APIs goes through one prefill pass of Qwen3.5-9B; the hidden state of one layer feeds a linear probe that predicts success and cost per tier; opastin routes to the tier with the best success minus λ·cost" width="100%">
+  <img src="docs/assets/opas-hero.svg" alt="opas: a request in any of four APIs goes through one prefill pass of Qwen3.5-9B; the hidden state of one layer feeds a linear probe that predicts success and cost per tier; opas routes to the tier with the best success minus λ·cost" width="100%">
 </p>
 
-An LLM router written in Rust. Clients send requests to opastin in the API they already
-use; opastin picks a model for each request and proxies it to that model's provider. It
+An LLM router written in Rust. Clients send requests to opas in the API they already
+use; opas picks a model for each request and proxies it to that model's provider. It
 can also return only the decision, or be used as a library.
 
 - **Four APIs, unchanged on the wire:** OpenAI Chat Completions, Anthropic Messages,
@@ -16,7 +16,7 @@ can also return only the decision, or be used as a library.
 - **Routing on model activations:** the probe router runs a local open-weights model
   (Qwen3.5-9B) over the request, without generating anything. A trained linear probe
   turns its hidden states into each tier's chance of success and expected output tokens.
-- **Cache-aware:** opastin knows which model served each conversation. Switching models
+- **Cache-aware:** opas knows which model served each conversation. Switching models
   mid-conversation loses that provider's prompt cache, so a switch has to be worth it.
 - **Provider-state affinity:** follow-ups that reference stored provider state
   (`previous_response_id`, `previous_interaction_id`) always go back to the model that
@@ -33,7 +33,7 @@ For each request:
 1. **Parse.** The request is parsed into one format-independent view: system prompt,
    messages (including tool calls and results), tools, and stream flag.
 2. **Check stored state.** If it continues provider-stored state (`previous_response_id` /
-   `previous_interaction_id`) that opastin saw being created, it goes to the same model.
+   `previous_interaction_id`) that opas saw being created, it goes to the same model.
    *Router: `affinity`.*
 3. **Look up the conversation.** Otherwise the message history is fingerprinted prefix by
    prefix. If an earlier turn of this conversation was served within the cache TTL, the
@@ -68,14 +68,14 @@ Default tier prices (USD per million tokens) are used when a model has no `prici
 ## Quick start
 
 ```sh
-cp opastin.example.toml opastin.toml
+cp opas.example.toml opas.toml
 export ANTHROPIC_API_KEY=...
-cargo run --release -p opastin-server -- --config opastin.toml
+cargo run --release -p opas-server -- --config opas.toml
 ```
 
 The first build compiles llama.cpp for the probe router, which needs cmake
 (`brew install cmake` or `apt install cmake clang libclang-dev`). Without it, build the
-random-router-only server with `cargo build -p opastin-server --no-default-features`.
+random-router-only server with `cargo build -p opas-server --no-default-features`.
 
 Point an SDK at it (base URL `http://127.0.0.1:8080/v1`, or `http://127.0.0.1:8080` for
 Anthropic SDKs), or call it directly:
@@ -105,12 +105,12 @@ direct.
 
 | Header | Present | Meaning |
 |---|---|---|
-| `x-opastin-model` | always | the model that served the request |
-| `x-opastin-router` | routed requests | the router that decided |
-| `x-opastin-decision-id` | routed requests | the decision's id |
-| `x-opastin-previous-model` | continued conversations | the model that served the previous turn |
+| `x-opas-model` | always | the model that served the request |
+| `x-opas-router` | routed requests | the router that decided |
+| `x-opas-decision-id` | routed requests | the decision's id |
+| `x-opas-previous-model` | continued conversations | the model that served the previous turn |
 
-**Credentials:** if a model's upstream sets `api_key_env`, opastin uses that key.
+**Credentials:** if a model's upstream sets `api_key_env`, opas uses that key.
 Otherwise it forwards the client's own credentials (`Authorization`, `x-api-key` or
 `x-goog-api-key`).
 
@@ -136,16 +136,16 @@ curl localhost:8080/v1/route -H 'content-type: application/json' -d '{
 
 ### As a library
 
-Use the crates directly: `opastin` for decisions and forwarding, `opastin-encoder` for
+Use the crates directly: `opas` for decisions and forwarding, `opas-encoder` for
 the encoder and `ProbeRouter`. Each crate has its own README:
 
-- [crates/opastin](crates/opastin/README.md)
-- [crates/opastin-server](crates/opastin-server/README.md)
-- [crates/opastin-encoder](crates/opastin-encoder/README.md)
+- [crates/opas](crates/opas/README.md)
+- [crates/opas-server](crates/opas-server/README.md)
+- [crates/opas-encoder](crates/opas-encoder/README.md)
 
 ## Configuration
 
-See [opastin.example.toml](opastin.example.toml). In short:
+See [opas.example.toml](opas.example.toml). In short:
 
 ```toml
 router_model = "auto"
@@ -183,8 +183,8 @@ curl -L -o models/gguf/Qwen3.5-9B-Q8_0.gguf \
 cd training && uv run prepare_llmrouterbench.py && cd ..
 
 # 3. Activations for the sample (Rust encoder; every layer, last-token and mean pooling)
-cargo build --release -p opastin-encoder
-./target/release/opastin-encode --input data/llmrouterbench/sample.jsonl \
+cargo build --release -p opas-encoder
+./target/release/opas-encode --input data/llmrouterbench/sample.jsonl \
   --out data/llmrouterbench/acts-9b --max-tokens 1024
 
 # 4. Train, evaluate, export models/probes/llmrouterbench-qwen35-9b.json and docs/probe-results.md
@@ -217,12 +217,12 @@ Step-by-step guides live in [docs/usage](docs/README.md): [HTTP API](docs/usage/
 **Docker:**
 
 ```sh
-docker build -t opastin .
+docker build -t opas .
 docker run -p 8080:8080 -e ANTHROPIC_API_KEY \
-  -v $PWD/opastin.toml:/etc/opastin/opastin.toml:ro opastin
+  -v $PWD/opas.toml:/etc/opas/opas.toml:ro opas
 ```
 
-The image contains `opastin` and `opastin-encode`. For the probe router, mount the model
+The image contains `opas` and `opas-encode`. For the probe router, mount the model
 and probe files (e.g. `-v $PWD/models:/models:ro`) and use `/models/...` paths in the
 config.
 
@@ -238,16 +238,16 @@ Measurements and options: [docs/usage/hardware.md](docs/usage/hardware.md).
 **Kubernetes:**
 
 ```sh
-kubectl -n opastin create secret generic opastin-api-keys --from-literal=ANTHROPIC_API_KEY=...
-kubectl -n opastin apply -k deploy/kubernetes
+kubectl -n opas create secret generic opas-api-keys --from-literal=ANTHROPIC_API_KEY=...
+kubectl -n opas apply -k deploy/kubernetes
 ```
 
 **Helm:**
 
 ```sh
-helm install opastin deploy/helm/opastin \
-  --set apiKeys.existingSecret=opastin-api-keys \
-  --set-file config=opastin.toml
+helm install opas deploy/helm/opas \
+  --set apiKeys.existingSecret=opas-api-keys \
+  --set-file config=opas.toml
 ```
 
 For the probe router, enable `models.persistence` and list files under `models.download`;
@@ -271,9 +271,9 @@ Cache-aware routing and affinity state are kept in memory in each pod, so the Se
 
 | Path | What |
 |---|---|
-| `crates/opastin` | Library / SDK: request parsing for four APIs, `Router` trait, tiers, cache-aware conversation tracking, config, gateway |
-| `crates/opastin-server` | The `opastin` HTTP server |
-| `crates/opastin-encoder` | In-process llama.cpp encoder, probe format, `ProbeRouter`, `opastin-encode` CLI |
+| `crates/opas` | Library / SDK: request parsing for four APIs, `Router` trait, tiers, cache-aware conversation tracking, config, gateway |
+| `crates/opas-server` | The `opas` HTTP server |
+| `crates/opas-encoder` | In-process llama.cpp encoder, probe format, `ProbeRouter`, `opas-encode` CLI |
 | `training/` | Offline tooling (Python): dataset preparation, probe training; `reference/` MLX cross-check |
 | `scripts/` | Dataset download |
 | `deploy/` | Kubernetes manifests and Helm chart |
@@ -284,5 +284,19 @@ Cache-aware routing and affinity state are kept in memory in each pod, so the Se
 ```sh
 cargo test --workspace                                   # unit and end-to-end tests (mock upstream)
 cargo clippy --workspace --all-targets -- -D warnings
-OPASTIN_TEST_MODEL=models/gguf/Qwen3.5-0.8B-Q8_0.gguf cargo test --release -p opastin-encoder
+OPAS_TEST_MODEL=models/gguf/Qwen3.5-0.8B-Q8_0.gguf cargo test --release -p opas-encoder
 ```
+
+## License
+
+MIT; see [LICENSE](LICENSE).
+
+Third-party components keep their own licenses:
+
+- llama.cpp: MIT, via `llama-cpp-sys-2`.
+- Qwen3.5 model weights: Apache-2.0.
+- LLMRouterBench data: MIT, with the benchmark questions inside under their original
+  licenses.
+
+Model weights and datasets are downloaded separately and are not part of this
+repository.

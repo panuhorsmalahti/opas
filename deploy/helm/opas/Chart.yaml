@@ -1,0 +1,7 @@
+apiVersion: v2
+name: opas
+description: opas LLM router (OpenAI, Anthropic, Open Responses and Gemini Interactions compatible)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [llm, router, gateway]

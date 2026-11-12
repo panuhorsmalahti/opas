@@ -1,7 +1,8 @@
 [project]
-name = "opastin-training"
+name = "opas-training"
 version = "0.1.0"
-description = "Offline tooling for opastin: dataset preparation and probe training (not used at runtime)"
+description = "Offline tooling for opas: dataset preparation and probe training (not used at runtime)"
+license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=2",

@@ -1,4 +1,4 @@
-"""Compare activations from the Rust encoder (opastin-encode --out DIR) with the Python
+"""Compare activations from the Rust encoder (opas-encode --out DIR) with the Python
 MLX reference (extract.py --out FILE.npz), per hidden-state index.
 
 Different runtimes and quantizations will not give identical numbers. What should hold:
@@ -7,7 +7,7 @@ Different runtimes and quantizations will not give identical numbers. What shoul
 - the prompt-by-prompt similarity structure (which prompts look alike) agrees.
 
 Usage (from training/):
-  ../target/release/opastin-encode --model ../models/gguf/Qwen3.5-0.8B-Q8_0.gguf --demo --out out/rust-0.8b
+  ../target/release/opas-encode --model ../models/gguf/Qwen3.5-0.8B-Q8_0.gguf --demo --out out/rust-0.8b
   uv run --group reference reference/extract.py --demo --out out/py-0.8b.npz
   uv run --group reference reference/compare.py out/rust-0.8b out/py-0.8b.npz
 """
