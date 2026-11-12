@@ -1,13 +1,16 @@
 //! Forwarding a request to the chosen model's upstream (feature `gateway`).
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use http::header::AUTHORIZATION;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
 use crate::api::ApiFormat;
+use crate::catalog::{parse_price_overrides, PriceCatalog, PriceSource};
 use crate::config::{Config, ConfigError, Upstream};
+use crate::conversation::Pricing;
 use crate::conversation::{ConversationTracker, PrefixKeys};
 use crate::request::{RequestError, RouteRequest};
 use crate::router::{Candidate, Decision, RouteError, Router};
@@ -26,6 +29,45 @@ const X_GOOG_API_KEY: HeaderName = HeaderName::from_static("x-goog-api-key");
 pub const HEADER_WEIGHTS: &str = "x-opas-weights";
 /// Request header: a named preset (`quality`, `balanced`, `cost`, `speed`).
 pub const HEADER_PREFERENCE: &str = "x-opas-preference";
+
+/// Request header: per-request model prices, `model=input/cached/output; …`
+/// (USD per million tokens).
+pub const HEADER_PRICING: &str = "x-opas-pricing";
+
+/// What a consumer can set per request.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RequestOptions {
+    /// Quality / speed / cost weights (default: the router's).
+    pub weights: Option<Weights>,
+    /// Prices by model id, overriding the operator's and models.dev prices.
+    pub pricing: HashMap<String, Pricing>,
+}
+
+impl RequestOptions {
+    /// From `x-opas-weights` / `x-opas-preference` and `x-opas-pricing`.
+    pub fn from_headers(headers: &HeaderMap) -> Result<Self, GatewayError> {
+        let pricing = match headers.get(HEADER_PRICING) {
+            Some(v) => parse_price_overrides(v.to_str().unwrap_or_default())
+                .map_err(|e| GatewayError::BadRequest(format!("{HEADER_PRICING}: {e}")))?,
+            None => HashMap::new(),
+        };
+        Ok(Self {
+            weights: weights_from_headers(headers)?,
+            pricing,
+        })
+    }
+}
+
+/// A model's resolved price and where it came from.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResolvedPrice {
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<Pricing>,
+    pub source: PriceSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models_dev: Option<String>,
+}
 
 /// Per-request weights from `x-opas-weights` or `x-opas-preference` (explicit weights
 /// win). `None` means the router's defaults.
@@ -89,6 +131,7 @@ pub struct Gateway {
     config: Config,
     router: Arc<dyn Router>,
     tracker: Option<ConversationTracker>,
+    catalog: RwLock<Arc<PriceCatalog>>,
     http: reqwest::Client,
 }
 
@@ -110,7 +153,140 @@ impl Gateway {
             tracker: config.cache.tracker(),
             config,
             router,
+            catalog: RwLock::new(Arc::new(PriceCatalog::default())),
             http: reqwest::Client::new(),
+        }
+    }
+
+    /// Replace the models.dev price catalog.
+    pub fn set_catalog(&self, catalog: PriceCatalog) {
+        *self.catalog.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(catalog);
+    }
+
+    pub fn catalog(&self) -> Arc<PriceCatalog> {
+        self.catalog
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Load the catalog from `[pricing] cache_file`, if it exists. Returns the number of
+    /// priced models.
+    pub fn load_price_cache(&self) -> Option<usize> {
+        let path = self.config.pricing.cache_file.as_ref()?;
+        let doc: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        let catalog = PriceCatalog::from_models_dev(&doc);
+        let n = catalog.len();
+        (n > 0).then(|| self.set_catalog(catalog)).map(|_| n)
+    }
+
+    /// Fetch the models.dev catalog and use it; also save it to `cache_file`. Returns the
+    /// number of priced models.
+    pub async fn refresh_prices(&self) -> Result<usize, GatewayError> {
+        let body = self
+            .http
+            .get(&self.config.pricing.models_dev_url)
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        let doc: Value = serde_json::from_slice(&body)
+            .map_err(|e| GatewayError::BadRequest(format!("models.dev: invalid JSON: {e}")))?;
+        let catalog = PriceCatalog::from_models_dev(&doc);
+        let n = catalog.len();
+        if n == 0 {
+            return Err(GatewayError::BadRequest(
+                "models.dev: no priced models".into(),
+            ));
+        }
+        self.set_catalog(catalog);
+        if let Some(path) = &self.config.pricing.cache_file {
+            if let Err(e) = std::fs::write(path, &body) {
+                tracing::warn!(path = %path.display(), error = %e, "could not write the price cache");
+            }
+        }
+        Ok(n)
+    }
+
+    /// The operator-level price of a configured model: config `pricing`, else models.dev
+    /// (explicit key, or inferred from the upstream for any API format), else none.
+    fn model_price(&self, model_id: &str) -> (Option<Pricing>, PriceSource, Option<String>) {
+        let Some(m) = self.config.model(model_id) else {
+            return (None, PriceSource::Unknown, None);
+        };
+        if let Some(p) = m.pricing {
+            return (Some(p), PriceSource::Config, m.models_dev.clone());
+        }
+        if self.config.pricing.models_dev {
+            let catalog = self.catalog();
+            if let Some(key) = &m.models_dev {
+                if let Some(p) = catalog.get(key) {
+                    return (Some(p), PriceSource::ModelsDev, Some(key.clone()));
+                }
+            }
+            for format in ApiFormat::ALL {
+                if let Some(up) = m.upstream(format) {
+                    if let Some((key, p)) = catalog.infer(&up.base_url, m.upstream_model()) {
+                        return (Some(p), PriceSource::ModelsDev, Some(key));
+                    }
+                }
+            }
+        }
+        let source = if m.tier.is_some() {
+            PriceSource::TierDefault
+        } else {
+            PriceSource::Unknown
+        };
+        (
+            m.tier.map(crate::Tier::default_pricing),
+            source,
+            m.models_dev.clone(),
+        )
+    }
+
+    /// Resolved prices of all configured models, for `/v1/pricing`.
+    pub fn price_table(&self) -> Vec<ResolvedPrice> {
+        self.config
+            .models
+            .iter()
+            .map(|m| {
+                let (pricing, source, models_dev) = self.model_price(&m.id);
+                ResolvedPrice {
+                    model: m.id.clone(),
+                    pricing,
+                    source,
+                    models_dev,
+                }
+            })
+            .collect()
+    }
+
+    /// Fill in candidate prices: request prices, then the candidate's own `pricing`, then
+    /// its `models_dev` key, then (configured models) the operator price. Candidates left
+    /// without a price fall back to their tier's default when scored.
+    fn price_candidates(&self, candidates: &mut [Candidate], overrides: &HashMap<String, Pricing>) {
+        let catalog = self.catalog();
+        for c in candidates.iter_mut() {
+            if let Some(p) = overrides.get(&c.id) {
+                c.pricing = Some(*p);
+                continue;
+            }
+            if c.pricing.is_some() {
+                continue;
+            }
+            if let Some(key) = &c.models_dev {
+                if let Some(p) = catalog.get(key) {
+                    c.pricing = Some(p);
+                    continue;
+                }
+            }
+            if let (Some(p), PriceSource::Config | PriceSource::ModelsDev, _) =
+                self.model_price(&c.id)
+            {
+                c.pricing = Some(p);
+            }
         }
     }
 
@@ -131,7 +307,8 @@ impl Gateway {
     /// provider-stored conversation (`previous_response_id` / `previous_interaction_id`)
     /// is pinned to the model that created it, without asking the router.
     pub async fn decide(&self, format: ApiFormat, body: &Value) -> Result<Decision, GatewayError> {
-        self.decide_with(format, body, None, None).await
+        self.decide_with(format, body, None, RequestOptions::default())
+            .await
     }
 
     /// Like [`Gateway::decide`], with a caller-supplied candidate list (for example
@@ -142,21 +319,27 @@ impl Gateway {
         body: &Value,
         candidates: Vec<Candidate>,
     ) -> Result<Decision, GatewayError> {
-        self.decide_with(format, body, Some(candidates), None).await
+        self.decide_with(format, body, Some(candidates), RequestOptions::default())
+            .await
     }
 
     /// The general form: optional caller-supplied candidates (default: configured models
-    /// for this format) and optional per-request weights (default: the router's).
+    /// for this format) and per-request options (weights, prices).
     pub async fn decide_with(
         &self,
         format: ApiFormat,
         body: &Value,
         candidates: Option<Vec<Candidate>>,
-        weights: Option<Weights>,
+        options: RequestOptions,
     ) -> Result<Decision, GatewayError> {
-        let candidates = candidates.unwrap_or_else(|| self.config.candidates(format));
+        let mut candidates = candidates.unwrap_or_else(|| self.config.candidates(format));
+        for p in options.pricing.values() {
+            p.validate().map_err(GatewayError::BadRequest)?;
+        }
+        self.price_candidates(&mut candidates, &options.pricing);
         let mut request = RouteRequest::from_json(format, body)?;
-        request.weights = weights
+        request.weights = options
+            .weights
             .map(Weights::validate)
             .transpose()
             .map_err(GatewayError::BadRequest)?;
@@ -223,8 +406,8 @@ impl Gateway {
             .to_owned();
 
         let (model_id, decision, conversation) = if requested == self.config.router_model {
-            let weights = weights_from_headers(client_headers)?;
-            let decision = self.decide_with(format, &body, None, weights).await?;
+            let options = RequestOptions::from_headers(client_headers)?;
+            let decision = self.decide_with(format, &body, None, options).await?;
             let conversation = decision.conversation.clone();
             (decision.model.clone(), Some(decision), conversation)
         } else {

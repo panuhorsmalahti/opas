@@ -65,6 +65,8 @@ async fn spawn_upstream(calls: Arc<AtomicUsize>) -> String {
 
 struct Harness {
     app: axum::Router,
+    gateway: Arc<Gateway>,
+    upstream_base: String,
     upstream_calls: Arc<AtomicUsize>,
 }
 
@@ -157,11 +159,14 @@ async fn harness_with(router: Option<Arc<dyn Router>>) -> Harness {
         "#
     ))
     .unwrap();
+    let gateway = Arc::new(match router {
+        Some(r) => Gateway::with_router(config, r),
+        None => Gateway::new(config).unwrap(),
+    });
     Harness {
-        app: opas_server::app(Arc::new(match router {
-            Some(r) => Gateway::with_router(config, r),
-            None => Gateway::new(config).unwrap(),
-        })),
+        app: opas_server::app(Arc::clone(&gateway)),
+        gateway,
+        upstream_base: base,
         upstream_calls: calls,
     }
 }
@@ -697,4 +702,132 @@ async fn proxy_requests_take_weights_from_headers_and_report_the_estimate() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(json_body(&resp)["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn consumers_override_prices_per_request() {
+    let h = harness_with(Some(Arc::new(FixedPredictions))).await;
+    let msg =
+        json!({"model": "auto", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]});
+    let route = |pricing: Value| {
+        req(
+            "/v1/route",
+            json!({"api": "anthropic_messages", "request": msg.clone(), "preference": "cost", "pricing": pricing}),
+            &[],
+        )
+    };
+    // Cost preference picks the cheap small model at its tier-default price...
+    let (_, _, b) = send(&h.app, route(json!({}))).await;
+    assert_eq!(json_body(&b)["model"], "small");
+    // ...but not when this request says small is expensive.
+    let (status, _, b) = send(
+        &h.app,
+        route(json!({"small": {"input": 500, "cached_input": 500, "output": 900}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let b = json_body(&b);
+    assert_eq!(b["model"], "big");
+    let small = b["estimates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["model"] == "small")
+        .unwrap()
+        .clone();
+    assert!(
+        small["expected_cost_usd"].as_f64().unwrap() > 0.5,
+        "{small}"
+    );
+
+    // The same through a proxy header.
+    let (_, headers, _) = send(
+        &h.app,
+        req(
+            "/v1/messages",
+            msg.clone(),
+            &[
+                ("x-opas-preference", "cost"),
+                ("x-opas-pricing", "small=500/500/900"),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(headers["x-opas-model"], "big");
+    let (status, _, _) = send(
+        &h.app,
+        req("/v1/messages", msg, &[("x-opas-pricing", "small=cheap")]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn prices_come_from_models_dev_for_operators_and_consumers() {
+    let h = harness_with(Some(Arc::new(FixedPredictions))).await;
+    let table = |b: &Bytes| json_body(b)["models"].as_array().unwrap().clone();
+    let source =
+        |rows: &[Value], m: &str| rows.iter().find(|r| r["model"] == m).unwrap()["source"].clone();
+
+    // Before a catalog is loaded: tier defaults, or unknown for a model without a tier.
+    let (status, _, b) = send(
+        &h.app,
+        Request::get("/v1/pricing").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = table(&b);
+    assert_eq!(source(&rows, "big"), "tier_default");
+    assert_eq!(source(&rows, "openai-only"), "unknown");
+
+    // A catalog whose provider API host matches big's upstream: big's upstream model
+    // "big-upstream" is found by inference.
+    h.gateway
+        .set_catalog(opas::PriceCatalog::from_models_dev(&json!({
+            "mockprov": {"api": h.upstream_base.clone(), "models": {
+                "big-upstream": {"cost": {"input": 3, "output": 15, "cache_read": 0.3}}
+            }}
+        })));
+    let (_, _, b) = send(
+        &h.app,
+        Request::get("/v1/pricing").body(Body::empty()).unwrap(),
+    )
+    .await;
+    let rows = table(&b);
+    let big = rows.iter().find(|r| r["model"] == "big").unwrap();
+    assert_eq!(big["source"], "models_dev");
+    assert_eq!(big["models_dev"], "mockprov/big-upstream");
+    assert_eq!(big["pricing"]["output"], 15.0);
+
+    // Consumers can price their own candidates by models.dev key.
+    let body = json!({
+        "api": "openai_chat",
+        "request": {"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+        "preference": "cost",
+        "candidates": [
+            {"id": "x", "tier": "small", "models_dev": "mockprov/big-upstream"},
+            {"id": "y", "tier": "small"}
+        ]
+    });
+    let (_, _, b) = send(&h.app, req("/v1/route", body, &[])).await;
+    let b = json_body(&b);
+    assert_eq!(
+        b["model"], "y",
+        "x is priced at 3/15 from models.dev, y at the small tier default"
+    );
+    let x = b["estimates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["model"] == "x")
+        .unwrap()
+        .clone();
+    let y = b["estimates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["model"] == "y")
+        .unwrap()
+        .clone();
+    assert!(x["expected_cost_usd"].as_f64() > y["expected_cost_usd"].as_f64());
 }

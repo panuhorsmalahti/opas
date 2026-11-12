@@ -17,6 +17,9 @@ can also return only the decision, or be used as a library.
 - **You choose the balance:** for every candidate opas predicts the chance of success,
   the cost and the response time. Clients weight quality, speed and cost per request
   (default 60 / 20 / 20) and get all estimates back from `/v1/route`.
+- **Prices from models.dev, overridable:** model prices come from the open
+  [models.dev](https://models.dev) catalog by default. The operator can set prices in the
+  config, and the consumer can override them per request.
 - **Routing on model activations:** the probe router runs a local open-weights model
   (Qwen3.5-9B) over the request, without generating anything. A trained linear probe
   turns its hidden states into each tier's chance of success and expected output tokens.
@@ -52,8 +55,9 @@ For each request:
        chat-formatted request, and the hidden state of one layer is taken.
      - For each candidate's tier, linear heads predict the success probability `p̂` and
        output tokens.
-     - Cost = prompt tokens × input price + predicted output tokens × output price, using
-       the candidate's `pricing` or its tier's defaults. For the model that served the
+     - Cost = prompt tokens × input price + predicted output tokens × output price.
+       Prices come from the request, the config, models.dev or the tier's defaults (most
+       specific first). For the model that served the
        previous turn, the cached part of the prompt is billed at the cached-input price.
      - Response time = time to first token + output tokens ÷ output speed (the
        candidate's `speed` or its tier's defaults): the total time to the complete
@@ -113,6 +117,7 @@ curl localhost:8080/v1/messages -H 'content-type: application/json' -d '{
 | `POST /v1/responses` | Open Responses |
 | `POST /v1beta/interactions`, `POST /v1/interactions` | Gemini Interactions |
 | `POST /v1/route` | Decision only (nothing forwarded) |
+| `GET /v1/pricing` | Resolved price per model and its source |
 | `GET /v1/models`, `GET /healthz` | Model list, liveness |
 
 **Routed vs direct:** send `"model": "auto"` to be routed, or a configured model id to go

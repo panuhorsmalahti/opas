@@ -52,6 +52,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "starting"
     );
 
+    let gateway = Arc::new(gateway);
+    if gateway.config().pricing.models_dev {
+        if let Some(n) = gateway.load_price_cache() {
+            tracing::info!(models = n, "loaded cached models.dev prices");
+        }
+        let gw = Arc::clone(&gateway);
+        let every = std::time::Duration::from_secs(gw.config().pricing.refresh_hours.max(1) * 3600);
+        tokio::spawn(async move {
+            loop {
+                match gw.refresh_prices().await {
+                    Ok(n) => tracing::info!(models = n, "loaded models.dev prices"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "could not load models.dev prices; using config and tier defaults")
+                    }
+                }
+                tokio::time::sleep(every).await;
+            }
+        });
+    }
+
     let listener = tokio::net::TcpListener::bind(&listen).await?;
     let addr = listener.local_addr()?;
     tracing::info!("listening on http://{addr}");
@@ -63,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              -p 127.0.0.1:8080:8080) or put an authenticating proxy in front"
         );
     }
-    axum::serve(listener, opas_server::app(Arc::new(gateway)))
+    axum::serve(listener, opas_server::app(gateway))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

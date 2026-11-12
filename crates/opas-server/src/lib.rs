@@ -8,6 +8,7 @@
 //! | `POST /v1beta/interactions`, `POST /v1/interactions` | Gemini Interactions API, routed and proxied |
 //! | `POST /v1/route` | Return the routing decision only; nothing is sent upstream |
 //! | `GET /v1/models` | The router model and the configured models |
+//! | `GET /v1/pricing` | Resolved price per configured model and its source (config, models.dev, tier default) |
 //! | `GET /healthz` | Liveness |
 
 use std::sync::Arc;
@@ -19,8 +20,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Json;
 use futures_util::StreamExt;
-use opas::gateway::{Gateway, GatewayError};
-use opas::{ApiFormat, Candidate, Preference, RouteError, Weights};
+use opas::gateway::{Gateway, GatewayError, RequestOptions};
+use std::collections::HashMap;
+
+use opas::{ApiFormat, Candidate, Preference, Pricing, RouteError, Weights};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -53,6 +56,7 @@ pub fn app(gateway: Arc<Gateway>) -> axum::Router {
         .route("/v1beta/interactions", post(gemini_interactions))
         .route("/v1/route", post(route_only))
         .route("/v1/models", get(models))
+        .route("/v1/pricing", get(pricing))
         .route("/healthz", get(|| async { "ok" }))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(gateway)
@@ -224,6 +228,10 @@ struct RouteBody {
     /// A named preset instead of `weights`: quality, balanced, cost or speed.
     #[serde(default)]
     preference: Option<Preference>,
+    /// Prices by model id for this request (USD per million tokens), overriding the
+    /// operator's and models.dev prices.
+    #[serde(default)]
+    pricing: HashMap<String, Pricing>,
 }
 
 /// Decide which model a request should go to, without forwarding it.
@@ -244,11 +252,14 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
     if parsed.candidates.as_ref().is_some_and(Vec::is_empty) {
         return error_response(format, ErrorKind::BadRequest, "`candidates` is empty");
     }
-    let weights = parsed
-        .weights
-        .or(parsed.preference.map(Preference::weights));
+    let options = RequestOptions {
+        weights: parsed
+            .weights
+            .or(parsed.preference.map(Preference::weights)),
+        pricing: parsed.pricing,
+    };
     let decided = gw
-        .decide_with(parsed.api, &parsed.request, parsed.candidates, weights)
+        .decide_with(parsed.api, &parsed.request, parsed.candidates, options)
         .await;
     match decided {
         Ok(d) => {
@@ -272,6 +283,16 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
         }
         Err(e) => gateway_error(format, &e),
     }
+}
+
+/// Resolved price per configured model and where it came from.
+async fn pricing(State(gw): State<AppState>) -> Response {
+    let catalog = gw.catalog();
+    Json(json!({
+        "models_dev": {"enabled": gw.config().pricing.models_dev, "priced_models": catalog.len()},
+        "models": gw.price_table(),
+    }))
+    .into_response()
 }
 
 /// List the router model and configured models. Anthropic-shaped if the client sent

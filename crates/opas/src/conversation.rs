@@ -48,6 +48,47 @@ pub struct Pricing {
     /// Price of input tokens read from the prompt cache.
     pub cached_input: f64,
     pub output: f64,
+    /// Higher prices that apply when the prompt exceeds a context size, as some
+    /// providers charge (e.g. above 100k or 200k tokens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_context: Option<LongContextPricing>,
+}
+
+/// Prices for prompts longer than `above_tokens`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LongContextPricing {
+    pub above_tokens: u64,
+    pub input: f64,
+    pub cached_input: f64,
+    pub output: f64,
+}
+
+impl Pricing {
+    /// Prices must be finite and non-negative.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut all = vec![self.input, self.cached_input, self.output];
+        if let Some(l) = &self.long_context {
+            all.extend([l.input, l.cached_input, l.output]);
+        }
+        if all.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return Err("prices must be finite and >= 0".into());
+        }
+        Ok(())
+    }
+
+    /// The prices that apply to a prompt of `prompt_tokens`.
+    pub fn for_prompt(&self, prompt_tokens: u64) -> Pricing {
+        match self.long_context {
+            Some(l) if prompt_tokens > l.above_tokens => Pricing {
+                input: l.input,
+                cached_input: l.cached_input,
+                output: l.output,
+                long_context: None,
+            },
+            _ => *self,
+        }
+    }
 }
 
 /// How fast a model answers, for response-time estimates.
@@ -411,6 +452,7 @@ mod tests {
                 input,
                 cached_input: cached,
                 output: 0.0,
+                long_context: None,
             }))
         };
         // Staying on the cached model costs nothing extra.

@@ -43,7 +43,10 @@ pub fn estimate_cost(
     out_tokens: f64,
     request: &RouteRequest,
 ) -> (f64, u64) {
-    let Some(price) = candidate.effective_pricing() else {
+    let Some(price) = candidate
+        .effective_pricing()
+        .map(|p| p.for_prompt(prompt_tokens))
+    else {
         return (0.0, 0);
     };
     let cached = match &request.conversation {
@@ -292,6 +295,7 @@ mod tests {
                 input: 1.0,
                 cached_input: 0.1,
                 output: 10.0,
+                long_context: None,
             }));
         // 10k prompt tokens × $1/M + 1k output × $10/M = $0.02.
         let (c, cached) = estimate_cost(&priced, 10_000, 1_000.0, &request(None));
@@ -350,6 +354,7 @@ mod tests {
             input: 2.0,
             cached_input: 0.1,
             output: 10.0,
+            long_context: None,
         });
         let a = Candidate::new("a")
             .with_tier(Some(Tier::Medium))

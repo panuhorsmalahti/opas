@@ -45,6 +45,7 @@ impl Tier {
             input,
             cached_input,
             output,
+            long_context: None,
         }
     }
 }

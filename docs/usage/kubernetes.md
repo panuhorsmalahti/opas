@@ -114,3 +114,14 @@ ports: [{name: http, port: 8080}]
 endpoints:
   - addresses: ["10.0.0.42"]     # the Mac running `opas --config opas.toml`
 ```
+
+## Model prices
+
+opas fetches model prices from models.dev (`https://models.dev/api.json`) at startup and
+once a day. If pods have no outbound internet access:
+
+- set prices per model in the config (`pricing = {…}`), or
+- point `[pricing] models_dev_url` at an internal mirror, or
+- disable the lookup with `models_dev = false`; tier default prices are then used.
+
+Check what is in effect with `GET /v1/pricing`.

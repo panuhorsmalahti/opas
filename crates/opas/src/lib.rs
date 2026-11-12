@@ -26,6 +26,7 @@
 //! [`Gateway::with_router`](gateway::Gateway::with_router).
 
 pub mod api;
+pub mod catalog;
 pub mod config;
 pub mod conversation;
 #[cfg(feature = "gateway")]
@@ -36,8 +37,9 @@ pub mod scoring;
 pub mod tier;
 
 pub use api::ApiFormat;
+pub use catalog::{PriceCatalog, PriceSource};
 pub use config::{CacheConfig, Config, ConfigError, ModelConfig, RouterConfig, Upstream};
-pub use conversation::{Conversation, ConversationTracker, Pricing, Speed};
+pub use conversation::{Conversation, ConversationTracker, LongContextPricing, Pricing, Speed};
 pub use request::{Message, RequestError, RouteRequest};
 pub use router::{Candidate, RandomRouter, Decision, RouteError, Router};
 pub use scoring::{Estimate, Preference, Weights};

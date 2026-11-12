@@ -21,6 +21,12 @@ kind = "random"   # uniform random choice (cache-aware: continued conversations 
 
 # Cache-aware routing: remember which model served each conversation so the next turn
 # can account for that provider's prompt cache. On by default.
+# Model prices from models.dev (https://models.dev), fetched at startup and refreshed.
+[pricing]
+models_dev = true
+# refresh_hours = 24
+# cache_file = "models-dev.json"   # last good copy, for starting offline
+
 [cache]
 ttl_secs = 300                 # how long provider prompt caches stay warm
 # state_ttl_secs = 604800      # how long stored response ids (Responses / Interactions) pin a model
@@ -32,6 +38,13 @@ ttl_secs = 300                 # how long provider prompt caches stay warm
 # `base_url` ends in the API version. `api_key_env` names the env var holding the
 # upstream key; leave it out to pass the client's own credentials through.
 #
+# Prices (USD per million tokens) come, most specific first, from:
+# - the request (`x-opas-pricing` header, or `pricing` in `/v1/route`);
+# - `pricing = { input = 4.0, cached_input = 0.2, output = 20.0 }` here;
+# - models.dev, by `models_dev = "anthropic/claude-opus-5-5"`, or inferred from the
+#   upstream URL and model name;
+# - the tier's defaults.
+#
 # `tier` (small / medium / large / xlarge) is what the probe router predicts for.
 # `pricing` (USD per million tokens) drives cost estimates, and `speed` response-time
 # estimates (`speed = { output_tokens_per_sec = 80, ttft_s = 0.6 }`); both default to the
@@ -40,14 +53,12 @@ ttl_secs = 300                 # how long provider prompt caches stay warm
 [[models]]
 id = "claude-opus-5-5"
 tier = "large"
-pricing = { input = 4.0, cached_input = 0.20, output = 20.0 }
 anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
 openai = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
 
 [[models]]
 id = "claude-haiku-5-5"
 tier = "small"
-pricing = { input = 0.10, cached_input = 0.01, output = 0.50 }
 anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
 openai = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
 

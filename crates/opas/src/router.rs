@@ -26,6 +26,10 @@ pub struct Candidate {
     /// Serving speed, if configured; used for response-time estimates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<Speed>,
+    /// models.dev catalog key (`provider/model`) to price this candidate from, when
+    /// `pricing` is not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_dev: Option<String>,
 }
 
 impl Candidate {
@@ -35,6 +39,7 @@ impl Candidate {
             tier: None,
             pricing: None,
             speed: None,
+            models_dev: None,
         }
     }
 

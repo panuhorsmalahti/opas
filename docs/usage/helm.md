@@ -119,3 +119,14 @@ helm uninstall opas -n opas
 The models PVC is annotated `helm.sh/resource-policy: keep`, so uninstalling keeps the
 downloaded models. Delete it yourself when you no longer need it:
 `kubectl -n opas delete pvc opas-models`.
+
+## Model prices
+
+opas fetches model prices from models.dev (`https://models.dev/api.json`) at startup and
+once a day. If pods have no outbound internet access:
+
+- set prices per model in the config (`pricing = {…}`), or
+- point `[pricing] models_dev_url` at an internal mirror, or
+- disable the lookup with `models_dev = false`; tier default prices are then used.
+
+Check what is in effect with `GET /v1/pricing`.

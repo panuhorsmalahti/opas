@@ -130,6 +130,14 @@ requests yourself, call `gateway.record_stored_response(&response_id, &model)` w
 response's id. Follow-ups with `previous_response_id` / `previous_interaction_id` are
 then pinned to that model. The server does this automatically.
 
+### Prices
+
+`Gateway` resolves candidate prices: request overrides, then config `pricing`, then
+models.dev, then tier defaults. Load the catalog with `gateway.refresh_prices().await`, or
+`gateway.load_price_cache()` for the cache file. You can also set one yourself:
+`gateway.set_catalog(PriceCatalog::from_models_dev(&json))`. Per-request prices go in
+`RequestOptions::pricing`, passed to `decide_with`.
+
 ## 5. Your own routing logic
 
 Implement `Router` and plug it into the `Gateway`:

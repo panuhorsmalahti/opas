@@ -130,6 +130,27 @@ It scores each 0–1 and picks the best weighted average. The default weights ar
 The ranges are fixed, so a few percent difference in price cannot swing a decision.
 Proxied responses carry the chosen model's prediction in `x-opas-estimate`.
 
+## Prices: operator defaults, consumer overrides
+
+Cost estimates use per-model prices in USD per million tokens. The most specific source
+wins:
+
+| Level | Who | How |
+|---|---|---|
+| This request | consumer | header `x-opas-pricing: my-model=4/0.2/20; other=0.1/0.01/0.5` (input/cached/output; `input/output` means no cache discount), or `"pricing": {"my-model": {"input": 4, "cached_input": 0.2, "output": 20}}` in `/v1/route`, or `candidates[].pricing` / `candidates[].models_dev` |
+| Configured model | operator | `pricing = {…}` on the model in `opas.toml` |
+| models.dev | operator (on by default) | the open catalog at [models.dev](https://models.dev): by `models_dev = "anthropic/claude-opus-5-5"`, or inferred from the upstream URL and model name. Fetched at startup and every `refresh_hours`. Includes higher long-context prices where providers charge them |
+| Fallback | — | the tier's default prices |
+
+`GET /v1/pricing` shows each configured model's resolved price and source (`config`,
+`models_dev`, `tier_default` or `unknown`).
+
+**Consumer-supplied candidates can be priced by catalog key:**
+
+```json
+"candidates": [{"id": "gpt", "tier": "large", "models_dev": "openai/gpt-5.6"}]
+```
+
 ## Response headers
 
 | Header | When | Meaning |
@@ -196,6 +217,7 @@ curl localhost:8080/v1/route -H 'content-type: application/json' -d '{
 - `weights` (optional): `{"quality": 60, "speed": 20, "cost": 20}`; only the ratios
   matter. Or `preference`: `quality`, `balanced`, `cost` or `speed`. The default is
   the server's configured weights (60 / 20 / 20 unless changed).
+- `pricing` (optional): prices by model id for this request; see "Prices" below.
 - `candidates` (optional): the models to choose from. Each has an `id`, a `tier`
   (`small`, `medium`, `large`, `xlarge`) and optional `pricing` in USD per million
   tokens; without pricing, tier defaults apply. Without `candidates`, the configured
@@ -211,6 +233,7 @@ of the decision API too.
 
 ## Other endpoints
 
+- `GET /v1/pricing` lists the resolved price of every configured model and its source.
 - `GET /v1/models` lists `auto` and the configured models. The response is
   Anthropic-shaped when the request carries `anthropic-version`, OpenAI-shaped otherwise.
 - `GET /healthz` returns `ok`.

@@ -25,7 +25,45 @@ pub struct Config {
     pub router: RouterConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub pricing: PricingConfig,
     pub models: Vec<ModelConfig>,
+}
+
+/// Where model prices come from (besides per-model `pricing` and per-request prices).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PricingConfig {
+    /// Look up prices on models.dev for models without a configured `pricing`.
+    #[serde(default = "default_true")]
+    pub models_dev: bool,
+    #[serde(default = "default_models_dev_url")]
+    pub models_dev_url: String,
+    /// Refresh the catalog this often.
+    #[serde(default = "default_refresh_hours")]
+    pub refresh_hours: u64,
+    /// Keep the last good catalog here, so the server starts with prices when offline.
+    #[serde(default)]
+    pub cache_file: Option<PathBuf>,
+}
+
+impl Default for PricingConfig {
+    fn default() -> Self {
+        Self {
+            models_dev: true,
+            models_dev_url: default_models_dev_url(),
+            refresh_hours: default_refresh_hours(),
+            cache_file: None,
+        }
+    }
+}
+
+fn default_models_dev_url() -> String {
+    "https://models.dev/api.json".into()
+}
+
+fn default_refresh_hours() -> u64 {
+    24
 }
 
 /// Cache-aware routing: track which model served each conversation.
@@ -160,6 +198,10 @@ pub struct ModelConfig {
     /// Defaults to the tier's typical prices.
     #[serde(default)]
     pub pricing: Option<Pricing>,
+    /// models.dev catalog key (`provider/model`, e.g. `anthropic/claude-opus-5-5`) for
+    /// prices. Inferred from the upstream URL and model name when unset.
+    #[serde(default)]
+    pub models_dev: Option<String>,
     /// Serving speed (`output_tokens_per_sec`, `ttft_s`) for response-time estimates.
     /// Defaults to the tier's rough typical speed.
     #[serde(default)]
@@ -332,6 +374,7 @@ mod tests {
             id = "gpt-5"
             tier = "large"
             pricing = { input = 1.25, cached_input = 0.125, output = 10.0 }
+            models_dev = "openai/gpt-5"
             openai = { base_url = "u" }
             "#,
         )
@@ -348,6 +391,8 @@ mod tests {
         let cands = c.candidates(ApiFormat::OpenaiChat);
         assert_eq!(cands[0].pricing.unwrap().cached_input, 0.125);
         assert_eq!(cands[0].tier, Some(Tier::Large));
+        assert_eq!(c.models[0].models_dev.as_deref(), Some("openai/gpt-5"));
+        assert!(c.pricing.models_dev, "models.dev lookups on by default");
 
         // Defaults: cache on, 5-minute TTL, random router.
         let d = Config::from_toml_str("[[models]]\nid = \"x\"\nopenai = { base_url = \"u\" }\n")
