@@ -211,8 +211,9 @@ for i, (name, p, cost, secs) in enumerate(tiers):
     text(x3 + w3 - 24, y + 22, secs, 13, TEAL, 700, "end", family=MONO)
     if i < 3:
         add(f'<line x1="{x3 + 24}" y1="{y + 56}" x2="{x3 + w3 - 24}" y2="{y + 56}" stroke="{CARD_EDGE}" stroke-opacity="0.6"/>')
-text(x3 + w3 / 2, BOT - 40, "success from the activations;", 12.5, FAINT, 400, "middle")
-text(x3 + w3 / 2, BOT - 20, "cost and time from your prices and speeds", 12.5, FAINT, 400, "middle")
+add(f'<rect x="{x3 + 22}" y="{BOT - 84}" width="{w3 - 44}" height="36" rx="10" fill="#0f1733" stroke="{TEAL}" stroke-opacity="0.5"/>')
+text(x3 + w3 / 2, BOT - 61, "lightweight predictor included in the repo", 12.5, TEAL, 600, "middle")
+text(x3 + w3 / 2, BOT - 22, "cost and time use your prices and speeds", 12.5, FAINT, 400, "middle")
 
 # --- 4. route ----------------------------------------------------------------------------
 x4, w4 = 1250, 310
