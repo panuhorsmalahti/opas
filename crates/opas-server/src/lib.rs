@@ -20,7 +20,7 @@ use axum::routing::{get, post};
 use axum::Json;
 use futures_util::StreamExt;
 use opas::gateway::{Gateway, GatewayError};
-use opas::{ApiFormat, Candidate, RouteError};
+use opas::{ApiFormat, Candidate, Preference, RouteError, Weights};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -30,6 +30,9 @@ pub const HEADER_MODEL: &str = "x-opas-model";
 pub const HEADER_DECISION_ID: &str = "x-opas-decision-id";
 /// Response header: router name, present only on routed requests.
 pub const HEADER_ROUTER: &str = "x-opas-router";
+/// Response header: the chosen model's prediction (`p_success`, `cost_usd`,
+/// `response_time_s`), present when the router predicts.
+pub const HEADER_ESTIMATE: &str = "x-opas-estimate";
 /// Response header: model that served the previous turn of this conversation, present
 /// when cache-aware routing recognized the request as a continuation.
 pub const HEADER_PREVIOUS_MODEL: &str = "x-opas-previous-model";
@@ -118,6 +121,16 @@ async fn proxy(gw: Arc<Gateway>, format: ApiFormat, headers: &HeaderMap, body: &
     if let Some(d) = &forwarded.decision {
         insert_header(out, HEADER_DECISION_ID, &d.decision_id);
         insert_header(out, HEADER_ROUTER, &d.router);
+        if let Some(e) = d.estimates.iter().find(|e| e.model == d.model) {
+            insert_header(
+                out,
+                HEADER_ESTIMATE,
+                &format!(
+                    "p_success={:.3}; cost_usd={:.6}; response_time_s={:.2}",
+                    e.p_success, e.expected_cost_usd, e.expected_response_time_s
+                ),
+            );
+        }
     }
     if let Some(c) = &forwarded.conversation {
         insert_header(out, HEADER_PREVIOUS_MODEL, &c.previous_model);
@@ -205,6 +218,12 @@ struct RouteBody {
     /// Defaults to the configured models that serve `api`.
     #[serde(default)]
     candidates: Option<Vec<Candidate>>,
+    /// Quality / speed / cost weights, e.g. `{"quality": 60, "speed": 20, "cost": 20}`.
+    #[serde(default)]
+    weights: Option<Weights>,
+    /// A named preset instead of `weights`: quality, balanced, cost or speed.
+    #[serde(default)]
+    preference: Option<Preference>,
 }
 
 /// Decide which model a request should go to, without forwarding it.
@@ -222,13 +241,15 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
         }
     };
 
-    let decided = match parsed.candidates {
-        Some(c) if c.is_empty() => {
-            return error_response(format, ErrorKind::BadRequest, "`candidates` is empty")
-        }
-        Some(c) => gw.decide_among(parsed.api, &parsed.request, c).await,
-        None => gw.decide(parsed.api, &parsed.request).await,
-    };
+    if parsed.candidates.as_ref().is_some_and(Vec::is_empty) {
+        return error_response(format, ErrorKind::BadRequest, "`candidates` is empty");
+    }
+    let weights = parsed
+        .weights
+        .or(parsed.preference.map(Preference::weights));
+    let decided = gw
+        .decide_with(parsed.api, &parsed.request, parsed.candidates, weights)
+        .await;
     match decided {
         Ok(d) => {
             let upstream_model = gw
@@ -244,6 +265,8 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
                 "reason": d.reason,
                 "api": parsed.api,
                 "conversation": d.conversation,
+                "weights": d.weights,
+                "estimates": d.estimates,
             }))
             .into_response()
         }

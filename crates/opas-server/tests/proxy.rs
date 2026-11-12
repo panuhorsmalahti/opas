@@ -11,7 +11,7 @@ use axum::routing::post;
 use axum::Json;
 use http_body_util::BodyExt;
 use opas::gateway::Gateway;
-use opas::Config;
+use opas::{Candidate, Config, Decision, Estimate, RouteError, RouteRequest, Router, Tier};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -68,7 +68,63 @@ struct Harness {
     upstream_calls: Arc<AtomicUsize>,
 }
 
+/// Test router that predicts like the probe router, from fixed per-tier numbers:
+/// small = 45% success, large = 88%; costs and times from tier defaults.
+struct FixedPredictions;
+
+#[async_trait::async_trait]
+impl Router for FixedPredictions {
+    fn name(&self) -> &str {
+        "fixed"
+    }
+
+    async fn route(&self, req: &RouteRequest, cands: &[Candidate]) -> Result<Decision, RouteError> {
+        let mut estimates: Vec<Estimate> = cands
+            .iter()
+            .filter_map(|c| {
+                let tier = c.tier?;
+                let (p, out) = if tier >= Tier::Large {
+                    (0.88, 800.0)
+                } else {
+                    (0.45, 300.0)
+                };
+                let price = c.effective_pricing()?;
+                let speed = c.effective_speed()?;
+                Some(Estimate {
+                    model: c.id.clone(),
+                    tier: Some(tier),
+                    p_success: p,
+                    expected_cost_usd: (1000.0 * price.input + out * price.output) / 1e6,
+                    expected_response_time_s: speed.response_time_s(out),
+                    expected_output_tokens: out,
+                    cached_prompt_tokens: 0,
+                    quality_score: 0.0,
+                    speed_score: 0.0,
+                    cost_score: 0.0,
+                    score: 0.0,
+                })
+            })
+            .collect();
+        let weights = req.weights.unwrap_or_default();
+        opas::scoring::score(&mut estimates, weights);
+        let best = estimates.first().ok_or(RouteError::NoCandidates)?;
+        Ok(Decision {
+            decision_id: "d".into(),
+            router: self.name().into(),
+            model: best.model.clone(),
+            reason: "fixed".into(),
+            conversation: None,
+            weights: Some(weights),
+            estimates,
+        })
+    }
+}
+
 async fn harness() -> Harness {
+    harness_with(None).await
+}
+
+async fn harness_with(router: Option<Arc<dyn Router>>) -> Harness {
     let calls = Arc::new(AtomicUsize::new(0));
     let base = spawn_upstream(calls.clone()).await;
     let config = Config::from_toml_str(&format!(
@@ -102,7 +158,10 @@ async fn harness() -> Harness {
     ))
     .unwrap();
     Harness {
-        app: opas_server::app(Arc::new(Gateway::new(config).unwrap())),
+        app: opas_server::app(Arc::new(match router {
+            Some(r) => Gateway::with_router(config, r),
+            None => Gateway::new(config).unwrap(),
+        })),
         upstream_calls: calls,
     }
 }
@@ -535,4 +594,107 @@ async fn route_endpoint_accepts_consumer_tier_candidates_and_new_apis() {
     let empty = json!({"api": "openai_chat", "request": {"messages": []}, "candidates": []});
     let (status, _, _) = send(&h.app, req("/v1/route", empty, &[])).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn consumers_set_quality_speed_cost_weights_and_get_estimates() {
+    let h = harness_with(Some(Arc::new(FixedPredictions))).await;
+    let route = |extra: Value| {
+        let mut body = json!({"api": "openai_chat", "request": {"model": "auto", "messages": [{"role": "user", "content": "hi"}]}});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        req("/v1/route", body, &[])
+    };
+
+    // Default weights: quality 60 / speed 20 / cost 20, echoed back with estimates.
+    let (status, _, body) = send(&h.app, route(json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&body);
+    assert_eq!(
+        body["weights"],
+        json!({"quality": 60.0, "speed": 20.0, "cost": 20.0})
+    );
+    let est = body["estimates"].as_array().unwrap();
+    assert_eq!(
+        est.len(),
+        2,
+        "big (large) and small (small); openai-only has no tier"
+    );
+    for e in est {
+        for k in [
+            "p_success",
+            "expected_cost_usd",
+            "expected_response_time_s",
+            "quality_score",
+            "speed_score",
+            "cost_score",
+            "score",
+        ] {
+            assert!(e[k].is_number(), "{k} in {e}");
+        }
+    }
+    assert!(
+        est[0]["score"].as_f64() >= est[1]["score"].as_f64(),
+        "best first"
+    );
+
+    // Presets and explicit weights change the choice.
+    let pick = |b: &Bytes| json_body(b)["model"].as_str().unwrap().to_owned();
+    let (_, _, b) = send(&h.app, route(json!({"preference": "quality"}))).await;
+    assert_eq!(pick(&b), "big");
+    let (_, _, b) = send(&h.app, route(json!({"preference": "cost"}))).await;
+    assert_eq!(pick(&b), "small");
+    let (_, _, b) = send(&h.app, route(json!({"weights": {"speed": 1}}))).await;
+    assert_eq!(pick(&b), "small");
+    let (_, _, b) = send(&h.app, route(json!({"weights": {"quality": 1}}))).await;
+    assert_eq!(pick(&b), "big");
+    let (status, _, _) = send(&h.app, route(json!({"weights": {"quality": 0}}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "all-zero weights");
+    let (status, _, _) = send(&h.app, route(json!({"preference": "fastest"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn proxy_requests_take_weights_from_headers_and_report_the_estimate() {
+    let h = harness_with(Some(Arc::new(FixedPredictions))).await;
+    let body =
+        json!({"model": "auto", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]});
+    let (status, headers, _) = send(
+        &h.app,
+        req(
+            "/v1/messages",
+            body.clone(),
+            &[("x-opas-preference", "quality")],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-opas-model"], "big");
+    let est = headers["x-opas-estimate"].to_str().unwrap();
+    assert!(
+        est.contains("p_success=0.880")
+            && est.contains("cost_usd=")
+            && est.contains("response_time_s="),
+        "{est}"
+    );
+
+    let (_, headers, _) = send(
+        &h.app,
+        req(
+            "/v1/messages",
+            body.clone(),
+            &[("x-opas-weights", "cost=1")],
+        ),
+    )
+    .await;
+    assert_eq!(headers["x-opas-model"], "small");
+
+    let (status, _, resp) = send(
+        &h.app,
+        req("/v1/messages", body, &[("x-opas-weights", "quality=abc")]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(&resp)["error"]["type"], "invalid_request_error");
 }

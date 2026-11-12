@@ -54,6 +54,7 @@ pub fn format_prompt(prompt: &str, thinking: ThinkingMode) -> String {
         has_tools: false,
         stream: false,
         continuation_id: None,
+        weights: None,
         conversation: None,
     };
     format_request(&request, thinking)

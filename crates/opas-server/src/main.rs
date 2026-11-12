@@ -79,7 +79,7 @@ fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> 
         RouterConfig::Probe {
             encoder_model,
             probe,
-            lambda,
+            weights,
             n_gpu_layers,
         } => {
             let untiered: Vec<&str> = config
@@ -91,9 +91,9 @@ fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> 
             if !untiered.is_empty() {
                 tracing::warn!(models = ?untiered, "models without a `tier` are never chosen by the probe router");
             }
-            tracing::info!(encoder = %encoder_model.display(), probe = %probe.display(), lambda, "loading probe router");
+            tracing::info!(encoder = %encoder_model.display(), probe = %probe.display(), %weights, "loading probe router");
             let router =
-                opas_encoder::ProbeRouter::load(encoder_model, probe, *lambda, *n_gpu_layers)?;
+                opas_encoder::ProbeRouter::load(encoder_model, probe, *weights, *n_gpu_layers)?;
             Ok(Gateway::with_router(config, Arc::new(router)))
         }
         #[cfg(not(feature = "probe"))]

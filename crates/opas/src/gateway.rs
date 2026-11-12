@@ -11,6 +11,7 @@ use crate::config::{Config, ConfigError, Upstream};
 use crate::conversation::{ConversationTracker, PrefixKeys};
 use crate::request::{RequestError, RouteRequest};
 use crate::router::{Candidate, Decision, RouteError, Router};
+use crate::scoring::{Preference, Weights};
 
 /// `anthropic-version` sent upstream when the client did not send one.
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -21,6 +22,33 @@ const ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
 const OPENAI_ORGANIZATION: HeaderName = HeaderName::from_static("openai-organization");
 const OPENAI_PROJECT: HeaderName = HeaderName::from_static("openai-project");
 const X_GOOG_API_KEY: HeaderName = HeaderName::from_static("x-goog-api-key");
+/// Request header: quality / speed / cost weights, e.g. `quality=60,speed=20,cost=20`.
+pub const HEADER_WEIGHTS: &str = "x-opas-weights";
+/// Request header: a named preset (`quality`, `balanced`, `cost`, `speed`).
+pub const HEADER_PREFERENCE: &str = "x-opas-preference";
+
+/// Per-request weights from `x-opas-weights` or `x-opas-preference` (explicit weights
+/// win). `None` means the router's defaults.
+pub fn weights_from_headers(headers: &HeaderMap) -> Result<Option<Weights>, GatewayError> {
+    let get = |name: &str| {
+        headers
+            .get(name)
+            .map(|v| v.to_str().unwrap_or_default().trim().to_owned())
+    };
+    if let Some(v) = get(HEADER_WEIGHTS) {
+        return v
+            .parse::<Weights>()
+            .map(Some)
+            .map_err(|e| GatewayError::BadRequest(format!("{HEADER_WEIGHTS}: {e}")));
+    }
+    if let Some(v) = get(HEADER_PREFERENCE) {
+        return v
+            .parse::<Preference>()
+            .map(|p| Some(p.weights()))
+            .map_err(|e| GatewayError::BadRequest(format!("{HEADER_PREFERENCE}: {e}")));
+    }
+    Ok(None)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum GatewayError {
@@ -103,8 +131,7 @@ impl Gateway {
     /// provider-stored conversation (`previous_response_id` / `previous_interaction_id`)
     /// is pinned to the model that created it, without asking the router.
     pub async fn decide(&self, format: ApiFormat, body: &Value) -> Result<Decision, GatewayError> {
-        self.decide_among(format, body, self.config.candidates(format))
-            .await
+        self.decide_with(format, body, None, None).await
     }
 
     /// Like [`Gateway::decide`], with a caller-supplied candidate list (for example
@@ -115,7 +142,24 @@ impl Gateway {
         body: &Value,
         candidates: Vec<Candidate>,
     ) -> Result<Decision, GatewayError> {
+        self.decide_with(format, body, Some(candidates), None).await
+    }
+
+    /// The general form: optional caller-supplied candidates (default: configured models
+    /// for this format) and optional per-request weights (default: the router's).
+    pub async fn decide_with(
+        &self,
+        format: ApiFormat,
+        body: &Value,
+        candidates: Option<Vec<Candidate>>,
+        weights: Option<Weights>,
+    ) -> Result<Decision, GatewayError> {
+        let candidates = candidates.unwrap_or_else(|| self.config.candidates(format));
         let mut request = RouteRequest::from_json(format, body)?;
+        request.weights = weights
+            .map(Weights::validate)
+            .transpose()
+            .map_err(GatewayError::BadRequest)?;
         let keys = self.tracker.as_ref().map(|_| PrefixKeys::new(format, body));
         if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
             request.conversation = tracker.lookup(keys);
@@ -132,6 +176,8 @@ impl Gateway {
                         ),
                         model,
                         conversation: request.conversation,
+                        estimates: vec![],
+                        weights: None,
                     });
                 }
                 Some(model) => {
@@ -177,7 +223,8 @@ impl Gateway {
             .to_owned();
 
         let (model_id, decision, conversation) = if requested == self.config.router_model {
-            let decision = self.decide(format, &body).await?;
+            let weights = weights_from_headers(client_headers)?;
+            let decision = self.decide_with(format, &body, None, weights).await?;
             let conversation = decision.conversation.clone();
             (decision.model.clone(), Some(decision), conversation)
         } else {

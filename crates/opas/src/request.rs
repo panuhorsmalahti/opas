@@ -34,6 +34,10 @@ pub struct RouteRequest {
     /// turns, so such a request can only be served by the model that produced that id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_id: Option<String>,
+    /// Per-request quality / speed / cost weights, overriding the router's defaults
+    /// (set by the gateway from `x-opas-weights` / `x-opas-preference` or `/v1/route`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weights: Option<crate::scoring::Weights>,
     /// The conversation this request continues, if known (filled in by the gateway for
     /// cache-aware routing).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +96,7 @@ impl RouteRequest {
             has_tools: nonempty_array(body, "tools") || nonempty_array(body, "functions"),
             stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
             continuation_id: None,
+            weights: None,
             conversation: None,
         })
     }
@@ -131,6 +136,7 @@ impl RouteRequest {
             has_tools: nonempty_array(body, "tools"),
             stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
             continuation_id: None,
+            weights: None,
             conversation: None,
         })
     }
@@ -197,6 +203,7 @@ impl RouteRequest {
             has_tools: nonempty_array(body, "tools"),
             stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
             continuation_id,
+            weights: None,
             conversation: None,
         })
     }
@@ -256,6 +263,7 @@ impl RouteRequest {
             has_tools: nonempty_array(body, "tools"),
             stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
             continuation_id,
+            weights: None,
             conversation: None,
         })
     }

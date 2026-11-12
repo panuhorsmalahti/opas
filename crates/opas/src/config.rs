@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::api::ApiFormat;
-use crate::conversation::{ConversationTracker, Pricing};
+use crate::conversation::{ConversationTracker, Pricing, Speed};
 use crate::router::{Candidate, RandomRouter, Router};
 use crate::tier::Tier;
 
@@ -82,10 +82,6 @@ fn default_state_ttl() -> u64 {
     7 * 24 * 3600
 }
 
-fn default_lambda() -> f64 {
-    10.0
-}
-
 fn default_gpu_layers() -> i32 {
     -1
 }
@@ -105,10 +101,10 @@ pub enum RouterConfig {
         encoder_model: PathBuf,
         /// Probe weights exported by `training/train_probe.py`.
         probe: PathBuf,
-        /// Success probability traded per USD of expected cost: route to
-        /// `argmax p − lambda × (cost + switch_cost)`.
-        #[serde(default = "default_lambda")]
-        lambda: f64,
+        /// Default quality / speed / cost weights; requests can override them.
+        /// Defaults to quality 60 / speed 20 / cost 20.
+        #[serde(default)]
+        weights: crate::scoring::Weights,
         /// Encoder layers offloaded to the GPU (negative = all).
         #[serde(default = "default_gpu_layers")]
         n_gpu_layers: i32,
@@ -164,6 +160,10 @@ pub struct ModelConfig {
     /// Defaults to the tier's typical prices.
     #[serde(default)]
     pub pricing: Option<Pricing>,
+    /// Serving speed (`output_tokens_per_sec`, `ttft_s`) for response-time estimates.
+    /// Defaults to the tier's rough typical speed.
+    #[serde(default)]
+    pub speed: Option<Speed>,
 }
 
 impl ModelConfig {
@@ -323,7 +323,7 @@ mod tests {
             kind = "probe"
             encoder_model = "models/gguf/enc.gguf"
             probe = "models/probes/p.json"
-            lambda = 20.0
+            weights = { quality = 50, speed = 0, cost = 50 }
 
             [cache]
             ttl_secs = 3600
@@ -337,7 +337,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(c.router, RouterConfig::Probe { lambda, n_gpu_layers: -1, .. } if lambda == 20.0)
+            matches!(c.router, RouterConfig::Probe { weights, n_gpu_layers: -1, .. } if weights == crate::Weights::new(50.0, 0.0, 50.0))
         );
         assert!(
             c.router.build().is_none(),

@@ -3,23 +3,24 @@
 //! For each request:
 //! 1. Run the encoder's prefill (no generation) and take the pooled hidden state at the
 //!    probe's layer.
-//! 2. For each candidate, look up its tier's head: success probability `p̂` and expected
+//! 2. For each candidate, look up its tier's head: success probability and expected
 //!    output tokens.
-//! 3. Price the request with the candidate's pricing (or its tier's default prices):
-//!    input tokens at the input price, output tokens at the output price.
+//! 3. Turn tokens into expected cost and response time with the candidate's pricing and
+//!    speed (or its tier's defaults).
 //!    - **Cache-aware:** if the request continues a conversation and the candidate served
 //!      the previous turn, the cached part of the prompt is billed at the cached-input
 //!      price. Every other candidate pays full price for it, so switching models mid-
-//!      conversation must buy enough expected quality to cover the lost cache.
-//! 4. Pick `argmax p̂ − λ·cost`.
+//!      conversation must be worth the lost cache.
+//! 4. Score quality, speed and cost with the request's weights (default 60/20/20; see
+//!    `opas::scoring`) and pick the best. All estimates are returned in the decision.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use opas::{Candidate, Decision, RouteError, RouteRequest, Router, Tier};
+use opas::{Candidate, Decision, Estimate, RouteError, RouteRequest, Router, Tier, Weights};
 
-use crate::probe::{Pooling, Prediction, Probe, ProbeError};
+use crate::probe::{Pooling, Probe, ProbeError};
 use crate::{Encoder, EncoderConfig, EncoderError, ThinkingMode};
 
 #[derive(Debug, thiserror::Error)]
@@ -30,30 +31,8 @@ pub enum ProbeRouterError {
     Probe(#[from] ProbeError),
     #[error("probe does not match encoder: {0}")]
     Mismatch(String),
-}
-
-/// One candidate's prediction, estimated cost and routing score.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Scored {
-    pub candidate: String,
-    pub tier: Tier,
-    pub prediction: Prediction,
-    /// Expected USD cost of the request on this candidate.
-    pub cost: f64,
-    /// Prompt tokens billed at the cached price (non-zero only for the model that
-    /// served the previous turn of the conversation).
-    pub cached_tokens: u64,
-    /// `p_success − λ·cost`.
-    pub score: f64,
-}
-
-/// Score candidates and return them best first.
-pub fn rank(mut scored: Vec<Scored>, lambda: f64) -> Vec<Scored> {
-    for s in &mut scored {
-        s.score = s.prediction.p_success - lambda * s.cost;
-    }
-    scored.sort_by(|a, b| b.score.total_cmp(&a.score));
-    scored
+    #[error("invalid weights: {0}")]
+    Weights(String),
 }
 
 /// Expected USD cost of a request on a candidate, and how many prompt tokens are billed
@@ -75,6 +54,34 @@ pub fn estimate_cost(
     ((input + out_tokens * price.output) / 1e6, cached)
 }
 
+/// Build an unscored estimate for a candidate from a tier prediction.
+pub fn estimate(
+    candidate: &Candidate,
+    tier: Tier,
+    p_success: f64,
+    out_tokens: f64,
+    prompt_tokens: u64,
+    request: &RouteRequest,
+) -> Estimate {
+    let (cost, cached) = estimate_cost(candidate, prompt_tokens, out_tokens, request);
+    let time = candidate
+        .effective_speed()
+        .map_or(0.0, |s| s.response_time_s(out_tokens));
+    Estimate {
+        model: candidate.id.clone(),
+        tier: Some(tier),
+        p_success,
+        expected_cost_usd: cost,
+        expected_response_time_s: time,
+        expected_output_tokens: out_tokens,
+        cached_prompt_tokens: cached,
+        quality_score: 0.0,
+        speed_score: 0.0,
+        cost_score: 0.0,
+        score: 0.0,
+    }
+}
+
 /// Cheap to clone: all state is shared.
 #[derive(Clone)]
 pub struct ProbeRouter {
@@ -84,15 +91,16 @@ pub struct ProbeRouter {
 struct Inner {
     encoder: Mutex<Encoder>,
     probe: Probe,
-    lambda: f64,
+    weights: Weights,
 }
 
 impl ProbeRouter {
     /// Load the encoder model configured to reproduce the probe's feature extraction.
+    /// `weights` are the defaults for requests that don't set their own.
     pub fn load(
         encoder_model: impl AsRef<Path>,
         probe_path: impl AsRef<Path>,
-        lambda: f64,
+        weights: Weights,
         n_gpu_layers: i32,
     ) -> Result<Self, ProbeRouterError> {
         let probe = Probe::load(probe_path)?;
@@ -109,10 +117,11 @@ impl ProbeRouter {
             verbose: false,
         };
         let encoder = Encoder::load(encoder_model, config)?;
-        Self::new(encoder, probe, lambda)
+        Self::new(encoder, probe, weights)
     }
 
-    pub fn new(encoder: Encoder, probe: Probe, lambda: f64) -> Result<Self, ProbeRouterError> {
+    pub fn new(encoder: Encoder, probe: Probe, weights: Weights) -> Result<Self, ProbeRouterError> {
+        let weights = weights.validate().map_err(ProbeRouterError::Weights)?;
         let spec = probe.spec();
         if encoder.n_embd() != spec.n_embd {
             return Err(ProbeRouterError::Mismatch(format!(
@@ -138,7 +147,7 @@ impl ProbeRouter {
             inner: Arc::new(Inner {
                 encoder: Mutex::new(encoder),
                 probe,
-                lambda,
+                weights,
             }),
         })
     }
@@ -147,8 +156,14 @@ impl ProbeRouter {
         &self.inner.probe
     }
 
-    pub fn lambda(&self) -> f64 {
-        self.inner.lambda
+    /// The default weights.
+    pub fn weights(&self) -> Weights {
+        self.inner.weights
+    }
+
+    /// Weights for a request: its own (`RouteRequest::weights`) or the defaults.
+    pub fn weights_for(&self, request: &RouteRequest) -> Weights {
+        request.weights.unwrap_or(self.inner.weights)
     }
 
     /// Encode the request and return the probe's feature vector.
@@ -167,13 +182,13 @@ impl ProbeRouter {
         })
     }
 
-    /// Predict and rank candidates for a request (blocking; runs the encoder).
-    /// Candidates without a tier the probe knows are skipped.
-    pub fn rank_blocking(
+    /// Predict, score and rank candidates for a request, best first (blocking; runs the
+    /// encoder). Candidates without a tier the probe knows are skipped.
+    pub fn estimate_blocking(
         &self,
         request: &RouteRequest,
         candidates: &[Candidate],
-    ) -> Result<Vec<Scored>, RouteError> {
+    ) -> Result<Vec<Estimate>, RouteError> {
         let probe = &self.inner.probe;
         let usable: Vec<(&Candidate, Tier)> = candidates
             .iter()
@@ -197,23 +212,22 @@ impl ProbeRouter {
             .features(request)
             .map_err(|e| RouteError::Failed(e.to_string()))?;
         let prompt_tokens = request.estimated_tokens();
-        let scored = usable
+        let mut estimates: Vec<Estimate> = usable
             .into_iter()
             .map(|(candidate, tier)| {
-                let prediction = probe.predict(tier, &features).expect("tier checked");
-                let (cost, cached_tokens) =
-                    estimate_cost(candidate, prompt_tokens, prediction.out_tokens, request);
-                Scored {
-                    candidate: candidate.id.clone(),
+                let p = probe.predict(tier, &features).expect("tier checked");
+                estimate(
+                    candidate,
                     tier,
-                    prediction,
-                    cost,
-                    cached_tokens,
-                    score: 0.0,
-                }
+                    p.p_success,
+                    p.out_tokens,
+                    prompt_tokens,
+                    request,
+                )
             })
             .collect();
-        Ok(rank(scored, self.inner.lambda))
+        opas::scoring::score(&mut estimates, self.weights_for(request));
+        Ok(estimates)
     }
 }
 
@@ -228,40 +242,29 @@ impl Router for ProbeRouter {
         request: &RouteRequest,
         candidates: &[Candidate],
     ) -> Result<Decision, RouteError> {
+        let weights = self.weights_for(request);
         let this = self.clone();
         let request = request.clone();
         let candidates = candidates.to_vec();
         // The prefill takes 100+ ms of GPU work; keep it off the async executor.
-        let ranked = tokio::task::spawn_blocking(move || this.rank_blocking(&request, &candidates))
-            .await
-            .map_err(|e| RouteError::Failed(format!("encoder task failed: {e}")))??;
+        let estimates =
+            tokio::task::spawn_blocking(move || this.estimate_blocking(&request, &candidates))
+                .await
+                .map_err(|e| RouteError::Failed(format!("encoder task failed: {e}")))??;
 
-        let reason = ranked
-            .iter()
-            .map(|s| {
-                let cached = if s.cached_tokens > 0 {
-                    format!(" ({} cached)", s.cached_tokens)
-                } else {
-                    String::new()
-                };
-                format!(
-                    "{} ({}): p={:.2} out≈{:.0} tok cost=${:.4}{cached} score={:.3}",
-                    s.candidate,
-                    s.tier,
-                    s.prediction.p_success,
-                    s.prediction.out_tokens,
-                    s.cost,
-                    s.score
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
+        let best = &estimates[0];
+        let reason = format!(
+            "best weighted score {:.3} ({weights}): p={:.2}, cost ${:.4}, {:.1}s",
+            best.score, best.p_success, best.expected_cost_usd, best.expected_response_time_s
+        );
         Ok(Decision {
             decision_id: uuid::Uuid::new_v4().to_string(),
             router: "probe".into(),
-            model: ranked[0].candidate.clone(),
-            reason: format!("lambda={}; {reason}", self.inner.lambda),
+            model: best.model.clone(),
+            reason,
             conversation: None,
+            estimates,
+            weights: Some(weights),
         })
     }
 }
@@ -269,34 +272,7 @@ impl Router for ProbeRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opas::{ApiFormat, Conversation, Pricing};
-
-    fn scored(name: &str, p: f64, cost: f64) -> Scored {
-        Scored {
-            candidate: name.into(),
-            tier: Tier::Medium,
-            prediction: Prediction {
-                p_success: p,
-                out_tokens: 0.0,
-            },
-            cost,
-            cached_tokens: 0,
-            score: 0.0,
-        }
-    }
-
-    #[test]
-    fn lambda_trades_success_against_cost() {
-        let options = || vec![scored("strong", 0.90, 0.050), scored("cheap", 0.70, 0.001)];
-        assert_eq!(rank(options(), 0.0)[0].candidate, "strong");
-        // λ = 10/$: strong 0.90 − 0.5 = 0.40, cheap 0.70 − 0.01 = 0.69.
-        let r = rank(options(), 10.0);
-        assert_eq!(r[0].candidate, "cheap");
-        assert!((r[0].score - 0.69).abs() < 1e-9);
-        // Break-even near λ ≈ 4.08.
-        assert_eq!(rank(options(), 4.0)[0].candidate, "strong");
-        assert_eq!(rank(options(), 4.2)[0].candidate, "cheap");
-    }
+    use opas::{ApiFormat, Conversation, Pricing, Speed};
 
     fn request(conversation: Option<Conversation>) -> RouteRequest {
         let mut r = RouteRequest::from_json(
@@ -345,8 +321,31 @@ mod tests {
     }
 
     #[test]
-    fn cache_keeps_a_conversation_on_its_model_unless_quality_justifies_a_switch() {
-        // Two medium-tier models, equal predicted quality. 200k cached tokens at "a".
+    fn response_time_uses_speed_or_tier_default() {
+        let fast = Candidate::new("f")
+            .with_tier(Some(Tier::Medium))
+            .with_speed(Some(Speed {
+                output_tokens_per_sec: 100.0,
+                ttft_s: 0.5,
+            }));
+        let e = estimate(&fast, Tier::Medium, 0.7, 1_000.0, 100, &request(None));
+        assert!(
+            (e.expected_response_time_s - 10.5).abs() < 1e-9,
+            "0.5 s + 1000 / 100 tok/s"
+        );
+        let default = Candidate::new("d").with_tier(Some(Tier::Large));
+        let e = estimate(&default, Tier::Large, 0.7, 500.0, 100, &request(None));
+        let s = Tier::Large.default_speed();
+        assert!(
+            (e.expected_response_time_s - (s.ttft_s + 500.0 / s.output_tokens_per_sec)).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn warm_cache_keeps_a_conversation_on_its_model_at_equal_quality() {
+        // Two medium-tier models with the same price, speed and predicted quality; a 200k
+        // token prompt prefix is cached at "a".
         let price = Some(Pricing {
             input: 2.0,
             cached_input: 0.1,
@@ -362,33 +361,12 @@ mod tests {
             previous_model: "a".into(),
             cached_tokens: 200_000,
         }));
-        let score = |c: &Candidate, p: f64| {
-            let (cost, cached) = estimate_cost(c, 210_000, 500.0, &req);
-            Scored {
-                candidate: c.id.clone(),
-                tier: Tier::Medium,
-                prediction: Prediction {
-                    p_success: p,
-                    out_tokens: 500.0,
-                },
-                cost,
-                cached_tokens: cached,
-                score: 0.0,
-            }
-        };
-        // Equal quality: stay on the cached model.
-        assert_eq!(
-            rank(vec![score(&a, 0.6), score(&b, 0.6)], 1.0)[0].candidate,
-            "a"
-        );
-        // Switching costs 200k × $1.9/M = $0.38 more; at λ = 1 that needs > 0.38 more p.
-        assert_eq!(
-            rank(vec![score(&a, 0.5), score(&b, 0.85)], 1.0)[0].candidate,
-            "a"
-        );
-        assert_eq!(
-            rank(vec![score(&a, 0.5), score(&b, 0.95)], 1.0)[0].candidate,
-            "b"
-        );
+        let mut e = vec![
+            estimate(&a, Tier::Medium, 0.6, 500.0, 210_000, &req),
+            estimate(&b, Tier::Medium, 0.6, 500.0, 210_000, &req),
+        ];
+        opas::scoring::score(&mut e, Weights::default());
+        assert_eq!(e[0].model, "a");
+        assert!(e[0].expected_cost_usd < e[1].expected_cost_usd);
     }
 }

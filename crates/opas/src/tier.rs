@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::Pricing;
+use crate::conversation::{Pricing, Speed};
 
 /// Capability band of a model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -45,6 +45,23 @@ impl Tier {
             input,
             cached_input,
             output,
+        }
+    }
+}
+
+impl Tier {
+    /// Rough typical serving speed for the tier, used when a model has no configured
+    /// `speed`. Real numbers vary a lot by provider and load; configure them per model.
+    pub fn default_speed(self) -> Speed {
+        let (output_tokens_per_sec, ttft_s) = match self {
+            Tier::Small => (150.0, 0.4),
+            Tier::Medium => (80.0, 0.6),
+            Tier::Large => (50.0, 1.0),
+            Tier::Xlarge => (35.0, 1.5),
+        };
+        Speed {
+            output_tokens_per_sec,
+            ttft_s,
         }
     }
 }

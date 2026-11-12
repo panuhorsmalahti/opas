@@ -7,8 +7,9 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::{Conversation, Pricing};
+use crate::conversation::{Conversation, Pricing, Speed};
 use crate::request::RouteRequest;
+use crate::scoring::{Estimate, Weights};
 use crate::tier::Tier;
 
 /// A model the router may choose.
@@ -22,6 +23,9 @@ pub struct Candidate {
     /// Prices, if configured; used for cost estimates and cache-aware routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<Pricing>,
+    /// Serving speed, if configured; used for response-time estimates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<Speed>,
 }
 
 impl Candidate {
@@ -30,12 +34,23 @@ impl Candidate {
             id: id.into(),
             tier: None,
             pricing: None,
+            speed: None,
         }
     }
 
     pub fn with_tier(mut self, tier: Option<Tier>) -> Self {
         self.tier = tier;
         self
+    }
+
+    pub fn with_speed(mut self, speed: Option<Speed>) -> Self {
+        self.speed = speed;
+        self
+    }
+
+    /// Configured speed, or the tier's default speed.
+    pub fn effective_speed(&self) -> Option<Speed> {
+        self.speed.or_else(|| self.tier.map(Tier::default_speed))
     }
 
     /// Configured pricing, or the tier's default pricing.
@@ -70,6 +85,13 @@ pub struct Decision {
     /// The conversation this request continued, if any (set by the gateway).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<Conversation>,
+    /// Predicted outcome and scores per candidate, best first, from routers that predict
+    /// (the probe router). Callers can apply their own trade-off to these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub estimates: Vec<Estimate>,
+    /// The quality / speed / cost weights the router used, if it uses them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weights: Option<Weights>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -154,6 +176,8 @@ impl Router for RandomRouter {
                         conv.cached_tokens
                     ),
                     conversation: None,
+                    estimates: vec![],
+                    weights: None,
                 });
             }
         }
@@ -167,6 +191,8 @@ impl Router for RandomRouter {
             model: candidates[index].id.clone(),
             reason: format!("uniform random pick from {} candidates", candidates.len()),
             conversation: None,
+            estimates: vec![],
+            weights: None,
         })
     }
 }
@@ -185,6 +211,7 @@ mod tests {
             has_tools: false,
             stream: false,
             continuation_id: None,
+            weights: None,
             conversation: None,
         }
     }

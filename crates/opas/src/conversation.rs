@@ -50,6 +50,24 @@ pub struct Pricing {
     pub output: f64,
 }
 
+/// How fast a model answers, for response-time estimates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Speed {
+    /// Output tokens per second once generation starts.
+    pub output_tokens_per_sec: f64,
+    /// Time to first token, in seconds.
+    pub ttft_s: f64,
+}
+
+impl Speed {
+    /// Expected seconds until the complete response: time to first token plus the time
+    /// to generate `output_tokens`.
+    pub fn response_time_s(&self, output_tokens: f64) -> f64 {
+        self.ttft_s + output_tokens / self.output_tokens_per_sec.max(1e-6)
+    }
+}
+
 /// Extra USD a candidate costs because its prompt cache is cold for this conversation:
 /// the cached prefix billed at full input price instead of the cached price. Zero for
 /// the model that served the previous turn, and when pricing is unknown.
