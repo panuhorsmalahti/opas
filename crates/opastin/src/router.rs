@@ -26,7 +26,11 @@ pub struct Candidate {
 
 impl Candidate {
     pub fn new(id: impl Into<String>) -> Self {
-        Self { id: id.into(), tier: None, pricing: None }
+        Self {
+            id: id.into(),
+            tier: None,
+            pricing: None,
+        }
     }
 
     pub fn with_tier(mut self, tier: Option<Tier>) -> Self {
@@ -36,7 +40,8 @@ impl Candidate {
 
     /// Configured pricing, or the tier's default pricing.
     pub fn effective_pricing(&self) -> Option<Pricing> {
-        self.pricing.or_else(|| self.tier.map(Tier::default_pricing))
+        self.pricing
+            .or_else(|| self.tier.map(Tier::default_pricing))
     }
 
     pub fn with_pricing(mut self, pricing: Option<Pricing>) -> Self {
@@ -179,6 +184,7 @@ mod tests {
             messages: vec![],
             has_tools: false,
             stream: false,
+            continuation_id: None,
             conversation: None,
         }
     }
@@ -186,9 +192,16 @@ mod tests {
     #[tokio::test]
     async fn continues_a_conversation_on_its_previous_model() {
         let router = RandomRouter::with_seed(1);
-        let candidates = [Candidate::from("a"), Candidate::from("b"), Candidate::from("c")];
+        let candidates = [
+            Candidate::from("a"),
+            Candidate::from("b"),
+            Candidate::from("c"),
+        ];
         let mut req = request();
-        req.conversation = Some(crate::Conversation { previous_model: "b".into(), cached_tokens: 5000 });
+        req.conversation = Some(crate::Conversation {
+            previous_model: "b".into(),
+            cached_tokens: 5000,
+        });
         for _ in 0..50 {
             let d = router.route(&req, &candidates).await.unwrap();
             assert_eq!(d.model, "b");

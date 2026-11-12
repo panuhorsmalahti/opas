@@ -71,11 +71,18 @@ pub struct PrefixKeys {
 
 impl PrefixKeys {
     pub fn new(format: ApiFormat, body: &Value) -> Self {
+        // Fields that precede the conversation in the provider's cached prefix, and the
+        // field holding the conversation itself.
+        let (prefix_fields, history_field): (&[&str], &str) = match format {
+            ApiFormat::OpenaiChat => (&["tools"], "messages"),
+            ApiFormat::AnthropicMessages => (&["system", "tools"], "messages"),
+            ApiFormat::OpenResponses => (&["instructions", "tools"], "input"),
+            ApiFormat::GeminiInteractions => (&["system_instruction", "tools"], "input"),
+        };
         let mut h = DefaultHasher::new();
         format.hash(&mut h);
         let mut tokens = 0;
-        // Everything that precedes the messages in the provider's cached prefix.
-        for field in ["system", "tools"] {
+        for field in prefix_fields {
             if let Some(v) = body.get(field) {
                 let s = v.to_string();
                 field.hash(&mut h);
@@ -84,7 +91,12 @@ impl PrefixKeys {
             }
         }
         let mut keys = vec![(h.finish(), tokens)];
-        for message in body.get("messages").and_then(Value::as_array).into_iter().flatten() {
+        let history: Vec<&Value> = match body.get(history_field) {
+            Some(Value::Array(items)) => items.iter().collect(),
+            Some(v @ (Value::String(_) | Value::Object(_))) => vec![v],
+            _ => vec![],
+        };
+        for message in history {
             let s = message.to_string();
             s.hash(&mut h);
             tokens += s.len() as u64 / BYTES_PER_TOKEN;
@@ -113,11 +125,14 @@ struct Entry {
     at: Instant,
 }
 
-/// In-memory map from conversation fingerprints to the model that served them.
+/// In-memory map from conversation fingerprints to the model that served them, plus
+/// provider-stored response ids to the model that created them.
 pub struct ConversationTracker {
     ttl: Duration,
+    state_ttl: Duration,
     max_entries: usize,
     entries: Mutex<HashMap<u64, Entry>>,
+    stored: Mutex<HashMap<String, Entry>>,
 }
 
 impl ConversationTracker {
@@ -125,9 +140,41 @@ impl ConversationTracker {
     pub fn new(ttl: Duration, max_entries: usize) -> Self {
         Self {
             ttl,
+            state_ttl: Duration::from_secs(7 * 24 * 3600),
             max_entries: max_entries.max(1),
             entries: Mutex::new(HashMap::new()),
+            stored: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// How long stored response ids are remembered (providers keep them for days).
+    pub fn with_state_ttl(mut self, ttl: Duration) -> Self {
+        self.state_ttl = ttl;
+        self
+    }
+
+    /// Remember that `model` produced the provider-stored response `id`
+    /// (Open Responses `id`, Gemini interaction `id`).
+    pub fn record_stored(&self, id: &str, model: &str) {
+        let mut stored = self.stored.lock().unwrap_or_else(|p| p.into_inner());
+        let now = Instant::now();
+        evict(&mut stored, self.max_entries, self.state_ttl, now);
+        stored.insert(
+            id.to_owned(),
+            Entry {
+                model: model.to_owned(),
+                at: now,
+            },
+        );
+    }
+
+    /// The model that produced a provider-stored response, if remembered.
+    pub fn lookup_stored(&self, id: &str) -> Option<String> {
+        let stored = self.stored.lock().unwrap_or_else(|p| p.into_inner());
+        stored
+            .get(id)
+            .filter(|e| e.at.elapsed() < self.state_ttl)
+            .map(|e| e.model.clone())
     }
 
     /// The conversation this request continues, if a strict prefix of its messages was
@@ -140,7 +187,10 @@ impl ConversationTracker {
             entries
                 .get(&hash)
                 .filter(|e| now.duration_since(e.at) < self.ttl)
-                .map(|e| Conversation { previous_model: e.model.clone(), cached_tokens: tokens })
+                .map(|e| Conversation {
+                    previous_model: e.model.clone(),
+                    cached_tokens: tokens,
+                })
         })
     }
 
@@ -151,24 +201,42 @@ impl ConversationTracker {
         }
         let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
         let now = Instant::now();
-        if entries.len() >= self.max_entries {
-            entries.retain(|_, e| now.duration_since(e.at) < self.ttl);
-            if entries.len() >= self.max_entries {
-                // Still full: drop the oldest half.
-                let mut ages: Vec<Instant> = entries.values().map(|e| e.at).collect();
-                ages.sort_unstable();
-                let cutoff = ages[ages.len() / 2];
-                entries.retain(|_, e| e.at > cutoff);
-            }
-        }
+        evict(&mut entries, self.max_entries, self.ttl, now);
         let (hash, _) = *keys.keys.last().expect("non-empty");
-        entries.insert(hash, Entry { model: model.to_owned(), at: now });
+        entries.insert(
+            hash,
+            Entry {
+                model: model.to_owned(),
+                at: now,
+            },
+        );
     }
 
     pub fn len(&self) -> usize {
         self.entries.lock().map(|e| e.len()).unwrap_or(0)
     }
+}
 
+/// Make room for one more entry: drop expired entries, then the oldest half if needed.
+fn evict<K: std::hash::Hash + Eq>(
+    map: &mut HashMap<K, Entry>,
+    max: usize,
+    ttl: Duration,
+    now: Instant,
+) {
+    if map.len() < max {
+        return;
+    }
+    map.retain(|_, e| now.duration_since(e.at) < ttl);
+    if map.len() >= max {
+        let mut ages: Vec<Instant> = map.values().map(|e| e.at).collect();
+        ages.sort_unstable();
+        let cutoff = ages[ages.len() / 2];
+        map.retain(|_, e| e.at > cutoff);
+    }
+}
+
+impl ConversationTracker {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -217,15 +285,29 @@ mod tests {
         let k2 = PrefixKeys::new(F, &turn2());
         t.record(&k2, "haiku");
         let mut turn3 = turn2();
-        turn3["messages"].as_array_mut().unwrap().push(json!({"role": "assistant", "content": "Fixed."}));
-        turn3["messages"].as_array_mut().unwrap().push(json!({"role": "user", "content": "Thanks, now add docs"}));
-        assert_eq!(t.lookup(&PrefixKeys::new(F, &turn3)).unwrap().previous_model, "haiku");
+        turn3["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"role": "assistant", "content": "Fixed."}));
+        turn3["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"role": "user", "content": "Thanks, now add docs"}));
+        assert_eq!(
+            t.lookup(&PrefixKeys::new(F, &turn3))
+                .unwrap()
+                .previous_model,
+            "haiku"
+        );
 
         // Different system prompt, or different API format: a different conversation.
         let mut other = turn2();
         other["system"] = json!("You are a poet.");
         assert_eq!(t.lookup(&PrefixKeys::new(F, &other)), None);
-        assert_eq!(t.lookup(&PrefixKeys::new(ApiFormat::OpenaiChat, &turn2())), None);
+        assert_eq!(
+            t.lookup(&PrefixKeys::new(ApiFormat::OpenaiChat, &turn2())),
+            None
+        );
     }
 
     #[test]
@@ -233,7 +315,11 @@ mod tests {
         let t = ConversationTracker::new(Duration::from_secs(300), 100);
         let k1 = PrefixKeys::new(F, &turn1());
         t.record(&k1, "opus");
-        assert_eq!(t.lookup(&k1), None, "a retry of the same request is not a continuation");
+        assert_eq!(
+            t.lookup(&k1),
+            None,
+            "a retry of the same request is not a continuation"
+        );
     }
 
     #[test]
@@ -252,10 +338,62 @@ mod tests {
     }
 
     #[test]
+    fn fingerprints_open_responses_and_gemini_histories() {
+        let t = ConversationTracker::new(Duration::from_secs(300), 100);
+        for (format, sys, turn_a, turn_b) in [
+            (
+                ApiFormat::OpenResponses,
+                "instructions",
+                json!({"role": "user", "content": "hi"}),
+                json!({"role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}),
+            ),
+            (
+                ApiFormat::GeminiInteractions,
+                "system_instruction",
+                json!({"type": "user_input", "content": [{"type": "text", "text": "hi"}]}),
+                json!({"type": "model_output", "content": [{"type": "text", "text": "hello"}]}),
+            ),
+        ] {
+            let t1 = json!({sys: "be nice", "input": [turn_a.clone()]});
+            t.record(&PrefixKeys::new(format, &t1), "m1");
+            let t2 = json!({sys: "be nice", "input": [turn_a, turn_b, {"type": "user_input", "role": "user", "content": "more"}]});
+            assert_eq!(
+                t.lookup(&PrefixKeys::new(format, &t2))
+                    .unwrap()
+                    .previous_model,
+                "m1",
+                "{format}"
+            );
+        }
+        // A plain string input is a one-message history.
+        assert_eq!(
+            PrefixKeys::new(ApiFormat::OpenResponses, &json!({"input": "hi"})).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn remembers_stored_response_ids() {
+        let t = ConversationTracker::new(Duration::from_secs(300), 100);
+        t.record_stored("resp_1", "gpt");
+        assert_eq!(t.lookup_stored("resp_1").as_deref(), Some("gpt"));
+        assert_eq!(t.lookup_stored("resp_2"), None);
+        let t = t.with_state_ttl(Duration::from_millis(0));
+        assert_eq!(t.lookup_stored("resp_1"), None, "expired");
+    }
+
+    #[test]
     fn switch_cost_prices_the_lost_cache() {
-        let conv = Conversation { previous_model: "opus".into(), cached_tokens: 100_000 };
+        let conv = Conversation {
+            previous_model: "opus".into(),
+            cached_tokens: 100_000,
+        };
         let priced = |id: &str, input, cached| {
-            Candidate::new(id).with_pricing(Some(Pricing { input, cached_input: cached, output: 0.0 }))
+            Candidate::new(id).with_pricing(Some(Pricing {
+                input,
+                cached_input: cached,
+                output: 0.0,
+            }))
         };
         // Staying on the cached model costs nothing extra.
         assert_eq!(switch_cost(&priced("opus", 4.0, 0.4), Some(&conv)), 0.0);

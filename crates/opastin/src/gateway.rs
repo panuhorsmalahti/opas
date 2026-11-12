@@ -10,7 +10,7 @@ use crate::api::ApiFormat;
 use crate::config::{Config, ConfigError, Upstream};
 use crate::conversation::{ConversationTracker, PrefixKeys};
 use crate::request::{RequestError, RouteRequest};
-use crate::router::{Decision, RouteError, Router};
+use crate::router::{Candidate, Decision, RouteError, Router};
 
 /// `anthropic-version` sent upstream when the client did not send one.
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -20,6 +20,7 @@ const ANTHROPIC_VERSION: HeaderName = HeaderName::from_static("anthropic-version
 const ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
 const OPENAI_ORGANIZATION: HeaderName = HeaderName::from_static("openai-organization");
 const OPENAI_PROJECT: HeaderName = HeaderName::from_static("openai-project");
+const X_GOOG_API_KEY: HeaderName = HeaderName::from_static("x-goog-api-key");
 
 #[derive(Debug, thiserror::Error)]
 pub enum GatewayError {
@@ -68,7 +69,9 @@ impl Gateway {
     /// cannot build (the probe router); use [`Gateway::with_router`] for those.
     pub fn new(config: Config) -> Result<Self, ConfigError> {
         let router = config.router.build().ok_or_else(|| {
-            ConfigError::Invalid("this router kind must be built by the caller (Gateway::with_router)".into())
+            ConfigError::Invalid(
+                "this router kind must be built by the caller (Gateway::with_router)".into(),
+            )
         })?;
         Ok(Self::with_router(config, router))
     }
@@ -91,24 +94,72 @@ impl Gateway {
         &self.router
     }
 
-    /// Choose a model for a request body without sending it anywhere.
+    /// Choose a model for a request body without sending it anywhere, among the
+    /// configured models that serve this API format.
     ///
     /// With cache-aware routing on, the request is matched against earlier turns; the
     /// router sees the previous model in `RouteRequest::conversation`, and the decision
-    /// is recorded so the next turn can find it.
+    /// is recorded so the next turn can find it. A request that continues a
+    /// provider-stored conversation (`previous_response_id` / `previous_interaction_id`)
+    /// is pinned to the model that created it, without asking the router.
     pub async fn decide(&self, format: ApiFormat, body: &Value) -> Result<Decision, GatewayError> {
+        self.decide_among(format, body, self.config.candidates(format))
+            .await
+    }
+
+    /// Like [`Gateway::decide`], with a caller-supplied candidate list (for example
+    /// models described only by tier and pricing in a `/v1/route` request).
+    pub async fn decide_among(
+        &self,
+        format: ApiFormat,
+        body: &Value,
+        candidates: Vec<Candidate>,
+    ) -> Result<Decision, GatewayError> {
         let mut request = RouteRequest::from_json(format, body)?;
         let keys = self.tracker.as_ref().map(|_| PrefixKeys::new(format, body));
         if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
             request.conversation = tracker.lookup(keys);
         }
-        let candidates = self.config.candidates(format);
+        if let Some(id) = &request.continuation_id {
+            match self.tracker.as_ref().and_then(|t| t.lookup_stored(id)) {
+                Some(model) if candidates.iter().any(|c| c.id == model) => {
+                    return Ok(Decision {
+                        decision_id: uuid::Uuid::new_v4().to_string(),
+                        router: "affinity".into(),
+                        reason: format!(
+                            "`{}` refers to state stored at `{model}`; only that model can continue it",
+                            format.continuation_field().unwrap_or("continuation id")
+                        ),
+                        model,
+                        conversation: request.conversation,
+                    });
+                }
+                Some(model) => {
+                    return Err(GatewayError::BadRequest(format!(
+                        "this conversation is stored at model `{model}`, which is not a candidate"
+                    )))
+                }
+                None => tracing::warn!(
+                    %id,
+                    "continuation id not seen by this router (expired or created elsewhere); routing normally"
+                ),
+            }
+        }
         let mut decision = self.router.route(&request, &candidates).await?;
         if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
             tracker.record(keys, &decision.model);
         }
         decision.conversation = request.conversation;
         Ok(decision)
+    }
+
+    /// Remember that `model` produced the provider-stored response `id`, so follow-ups
+    /// that reference it are pinned to `model`. Called with the id of each upstream
+    /// response for APIs that store state (Open Responses, Gemini Interactions).
+    pub fn record_stored_response(&self, id: &str, model: &str) {
+        if let Some(t) = &self.tracker {
+            t.record_stored(id, model);
+        }
     }
 
     /// Send a request upstream. If its `model` is the router model, route it first;
@@ -205,7 +256,7 @@ fn upstream_headers(
     };
 
     match format {
-        ApiFormat::OpenaiChat => {
+        ApiFormat::OpenaiChat | ApiFormat::OpenResponses => {
             match key {
                 Some((var, k)) => {
                     h.insert(AUTHORIZATION, header_value(var, format!("Bearer {k}"))?);
@@ -215,6 +266,15 @@ fn upstream_headers(
             copy(&mut h, &OPENAI_ORGANIZATION);
             copy(&mut h, &OPENAI_PROJECT);
         }
+        ApiFormat::GeminiInteractions => match key {
+            Some((var, k)) => {
+                h.insert(X_GOOG_API_KEY, header_value(var, k)?);
+            }
+            None => {
+                copy(&mut h, &X_GOOG_API_KEY);
+                copy(&mut h, &AUTHORIZATION);
+            }
+        },
         ApiFormat::AnthropicMessages => {
             match key {
                 Some((var, k)) => {

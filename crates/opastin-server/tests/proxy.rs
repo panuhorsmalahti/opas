@@ -18,9 +18,18 @@ use tower::ServiceExt;
 /// Mock provider: echoes the model and auth headers it received. Streams SSE when asked.
 async fn spawn_upstream(calls: Arc<AtomicUsize>) -> String {
     async fn echo(calls: Arc<AtomicUsize>, headers: HeaderMap, body: Bytes) -> Response {
-        calls.fetch_add(1, Ordering::SeqCst);
+        let n = calls.fetch_add(1, Ordering::SeqCst);
         let body: Value = serde_json::from_slice(&body).unwrap();
         let h = |n: &str| headers.get(n).map(|v| v.to_str().unwrap().to_owned());
+        let id = format!("resp_{n}");
+        if body["stream"] == json!(true) && body.get("input").is_some() {
+            // Open Responses-style stream: the response id arrives in the first event.
+            let sse = format!(
+                "event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"{id}\",\"model\":\"{}\"}}}}\n\nevent: response.completed\ndata: {{\"type\":\"response.completed\"}}\n\n",
+                body["model"].as_str().unwrap()
+            );
+            return ([("content-type", "text/event-stream")], sse).into_response();
+        }
         if body["stream"] == json!(true) {
             let sse = format!(
                 "data: {{\"model\":\"{}\",\"chunk\":1}}\n\ndata: {{\"chunk\":2}}\n\ndata: [DONE]\n\n",
@@ -29,7 +38,9 @@ async fn spawn_upstream(calls: Arc<AtomicUsize>) -> String {
             return ([("content-type", "text/event-stream")], sse).into_response();
         }
         Json(json!({
+            "id": id,
             "model": body["model"],
+            "x_goog_api_key": h("x-goog-api-key"),
             "authorization": h("authorization"),
             "x_api_key": h("x-api-key"),
             "anthropic_version": h("anthropic-version"),
@@ -37,13 +48,15 @@ async fn spawn_upstream(calls: Arc<AtomicUsize>) -> String {
         .into_response()
     }
 
-    let (c1, c2) = (calls.clone(), calls);
+    let (c1, c2, c3, c4) = (calls.clone(), calls.clone(), calls.clone(), calls);
     let app = axum::Router::new()
         .route(
             "/v1/chat/completions",
             post(move |h, b| echo(c1.clone(), h, b)),
         )
-        .route("/v1/messages", post(move |h, b| echo(c2.clone(), h, b)));
+        .route("/v1/messages", post(move |h, b| echo(c2.clone(), h, b)))
+        .route("/v1/responses", post(move |h, b| echo(c3.clone(), h, b)))
+        .route("/v1/interactions", post(move |h, b| echo(c4.clone(), h, b)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -67,14 +80,20 @@ async fn harness() -> Harness {
 
         [[models]]
         id = "big"
+        tier = "large"
         upstream_model = "big-upstream"
         openai = {{ base_url = "{base}" }}
         anthropic = {{ base_url = "{base}" }}
+        responses = {{ base_url = "{base}" }}
+        interactions = {{ base_url = "{base}" }}
 
         [[models]]
         id = "small"
+        tier = "small"
         openai = {{ base_url = "{base}" }}
         anthropic = {{ base_url = "{base}" }}
+        responses = {{ base_url = "{base}" }}
+        interactions = {{ base_url = "{base}" }}
 
         [[models]]
         id = "openai-only"
@@ -340,7 +359,8 @@ async fn cache_aware_routing_keeps_a_conversation_on_one_model() {
     // Ten independent conversations: each turn 2 must go to the model that served turn 1,
     // even though the random choice would otherwise pick at random.
     for i in 0..10 {
-        let first_user = json!({"role": "user", "content": format!("task {i}: refactor the parser")});
+        let first_user =
+            json!({"role": "user", "content": format!("task {i}: refactor the parser")});
         let (status, headers, _) = send(
             &h.app,
             req(
@@ -352,7 +372,10 @@ async fn cache_aware_routing_keeps_a_conversation_on_one_model() {
         .await;
         assert_eq!(status, StatusCode::OK);
         let first = headers["x-opastin-model"].to_str().unwrap().to_owned();
-        assert!(!headers.contains_key("x-opastin-previous-model"), "turn 1 is new");
+        assert!(
+            !headers.contains_key("x-opastin-previous-model"),
+            "turn 1 is new"
+        );
 
         let (status, headers, _) = send(
             &h.app,
@@ -368,7 +391,11 @@ async fn cache_aware_routing_keeps_a_conversation_on_one_model() {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers["x-opastin-model"], first.as_str(), "turn 2 stays on the cached model");
+        assert_eq!(
+            headers["x-opastin-model"],
+            first.as_str(),
+            "turn 2 stays on the cached model"
+        );
         assert_eq!(headers["x-opastin-previous-model"], first.as_str());
     }
 }
@@ -377,18 +404,139 @@ async fn cache_aware_routing_keeps_a_conversation_on_one_model() {
 async fn route_endpoint_reports_the_continued_conversation() {
     let h = harness().await;
     let turn1 = json!({"model": "auto", "messages": [{"role": "user", "content": "hello"}]});
-    let (_, _, body) = send(&h.app, req("/v1/route", json!({"api": "openai_chat", "request": turn1}), &[])).await;
+    let (_, _, body) = send(
+        &h.app,
+        req(
+            "/v1/route",
+            json!({"api": "openai_chat", "request": turn1}),
+            &[],
+        ),
+    )
+    .await;
     let first = json_body(&body)["model"].as_str().unwrap().to_owned();
-    assert!(json_body(&body).get("conversation").map_or(true, Value::is_null));
+    assert!(json_body(&body)
+        .get("conversation")
+        .map_or(true, Value::is_null));
 
     let turn2 = json!({"model": "auto", "messages": [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi"},
         {"role": "user", "content": "more"}
     ]});
-    let (_, _, body) = send(&h.app, req("/v1/route", json!({"api": "openai_chat", "request": turn2}), &[])).await;
+    let (_, _, body) = send(
+        &h.app,
+        req(
+            "/v1/route",
+            json!({"api": "openai_chat", "request": turn2}),
+            &[],
+        ),
+    )
+    .await;
     let body = json_body(&body);
     assert_eq!(body["model"], first.as_str());
     assert_eq!(body["conversation"]["previous_model"], first.as_str());
     assert!(body["conversation"]["cached_tokens"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn open_responses_follow_ups_return_to_the_model_holding_the_state() {
+    let h = harness().await;
+    for stream in [false, true] {
+        for _ in 0..8 {
+            let first = json!({"model": "auto", "instructions": "be brief", "input": "start a task", "stream": stream});
+            let (status, headers, body) = send(
+                &h.app,
+                req("/v1/responses", first, &[("authorization", "Bearer k")]),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let model = headers["x-opastin-model"].to_str().unwrap().to_owned();
+            let text = String::from_utf8(body.to_vec()).unwrap();
+            let id = text
+                .split("resp_")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            let id = format!("resp_{id}");
+
+            // Only the new input; the provider holds the rest under previous_response_id.
+            let follow = json!({"model": "auto", "previous_response_id": id, "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": "continue"}]}
+            ]});
+            let (status, headers, _) = send(&h.app, req("/v1/responses", follow, &[])).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                headers["x-opastin-model"],
+                model.as_str(),
+                "stream={stream}"
+            );
+            assert_eq!(headers["x-opastin-router"], "affinity");
+        }
+    }
+}
+
+#[tokio::test]
+async fn gemini_interactions_are_routed_with_google_auth_and_errors() {
+    let h = harness().await;
+    let body = json!({"model": "auto", "system_instruction": "x", "input": [
+        {"type": "user_input", "content": [{"type": "text", "text": "hello"}]}
+    ]});
+    for path in ["/v1beta/interactions", "/v1/interactions"] {
+        let (status, headers, resp) =
+            send(&h.app, req(path, body.clone(), &[("x-goog-api-key", "gk")])).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let model = headers["x-opastin-model"].to_str().unwrap();
+        assert!(model == "big" || model == "small");
+        let resp = json_body(&resp);
+        assert_eq!(resp["x_goog_api_key"], "gk", "client key passed through");
+        assert!(resp["id"].as_str().unwrap().starts_with("resp_"));
+    }
+
+    // Google-style error body for an unknown model.
+    let (status, _, resp) = send(
+        &h.app,
+        req(
+            "/v1beta/interactions",
+            json!({"model": "nope", "input": "x"}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let resp = json_body(&resp);
+    assert_eq!(resp["error"]["status"], "NOT_FOUND");
+    assert_eq!(resp["error"]["code"], 404);
+
+    // Open Responses error vocabulary.
+    let (status, _, resp) = send(&h.app, req("/v1/responses", json!({"model": "auto"}), &[])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(&resp)["error"]["type"], "invalid_request");
+}
+
+#[tokio::test]
+async fn route_endpoint_accepts_consumer_tier_candidates_and_new_apis() {
+    let h = harness().await;
+    let body = json!({
+        "api": "open_responses",
+        "request": {"model": "auto", "input": "summarize this"},
+        "candidates": [
+            {"id": "my-haiku", "tier": "small", "pricing": {"input": 0.1, "cached_input": 0.01, "output": 0.5}},
+            {"id": "my-fable", "tier": "xlarge"}
+        ]
+    });
+    let (status, _, resp) = send(&h.app, req("/v1/route", body, &[])).await;
+    assert_eq!(status, StatusCode::OK);
+    let resp = json_body(&resp);
+    let model = resp["model"].as_str().unwrap();
+    assert!(model == "my-haiku" || model == "my-fable", "{model}");
+    assert!(resp["upstream_model"].is_null(), "not a configured model");
+
+    let gemini = json!({"api": "gemini_interactions", "request": {"model": "auto", "input": "hi"}});
+    let (status, _, _) = send(&h.app, req("/v1/route", gemini, &[])).await;
+    assert_eq!(status, StatusCode::OK);
+    let empty = json!({"api": "openai_chat", "request": {"messages": []}, "candidates": []});
+    let (status, _, _) = send(&h.app, req("/v1/route", empty, &[])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

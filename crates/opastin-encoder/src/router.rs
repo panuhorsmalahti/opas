@@ -185,7 +185,11 @@ impl ProbeRouter {
             } else {
                 RouteError::Failed(format!(
                     "no candidate has a tier the probe predicts ({})",
-                    probe.tiers().map(Tier::as_str).collect::<Vec<_>>().join(", ")
+                    probe
+                        .tiers()
+                        .map(Tier::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
             });
         }
@@ -228,10 +232,9 @@ impl Router for ProbeRouter {
         let request = request.clone();
         let candidates = candidates.to_vec();
         // The prefill takes 100+ ms of GPU work; keep it off the async executor.
-        let ranked =
-            tokio::task::spawn_blocking(move || this.rank_blocking(&request, &candidates))
-                .await
-                .map_err(|e| RouteError::Failed(format!("encoder task failed: {e}")))??;
+        let ranked = tokio::task::spawn_blocking(move || this.rank_blocking(&request, &candidates))
+            .await
+            .map_err(|e| RouteError::Failed(format!("encoder task failed: {e}")))??;
 
         let reason = ranked
             .iter()
@@ -243,7 +246,12 @@ impl Router for ProbeRouter {
                 };
                 format!(
                     "{} ({}): p={:.2} out≈{:.0} tok cost=${:.4}{cached} score={:.3}",
-                    s.candidate, s.tier, s.prediction.p_success, s.prediction.out_tokens, s.cost, s.score
+                    s.candidate,
+                    s.tier,
+                    s.prediction.p_success,
+                    s.prediction.out_tokens,
+                    s.cost,
+                    s.score
                 )
             })
             .collect::<Vec<_>>()
@@ -344,8 +352,12 @@ mod tests {
             cached_input: 0.1,
             output: 10.0,
         });
-        let a = Candidate::new("a").with_tier(Some(Tier::Medium)).with_pricing(price);
-        let b = Candidate::new("b").with_tier(Some(Tier::Medium)).with_pricing(price);
+        let a = Candidate::new("a")
+            .with_tier(Some(Tier::Medium))
+            .with_pricing(price);
+        let b = Candidate::new("b")
+            .with_tier(Some(Tier::Medium))
+            .with_pricing(price);
         let req = request(Some(Conversation {
             previous_model: "a".into(),
             cached_tokens: 200_000,
@@ -365,9 +377,18 @@ mod tests {
             }
         };
         // Equal quality: stay on the cached model.
-        assert_eq!(rank(vec![score(&a, 0.6), score(&b, 0.6)], 1.0)[0].candidate, "a");
+        assert_eq!(
+            rank(vec![score(&a, 0.6), score(&b, 0.6)], 1.0)[0].candidate,
+            "a"
+        );
         // Switching costs 200k × $1.9/M = $0.38 more; at λ = 1 that needs > 0.38 more p.
-        assert_eq!(rank(vec![score(&a, 0.5), score(&b, 0.85)], 1.0)[0].candidate, "a");
-        assert_eq!(rank(vec![score(&a, 0.5), score(&b, 0.95)], 1.0)[0].candidate, "b");
+        assert_eq!(
+            rank(vec![score(&a, 0.5), score(&b, 0.85)], 1.0)[0].candidate,
+            "a"
+        );
+        assert_eq!(
+            rank(vec![score(&a, 0.5), score(&b, 0.95)], 1.0)[0].candidate,
+            "b"
+        );
     }
 }

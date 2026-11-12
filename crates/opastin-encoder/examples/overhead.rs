@@ -28,7 +28,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("model: {path} ({n_layer} layers), median of {runs} runs");
     for (label, layers) in setups {
-        let mut enc = Encoder::load(&path, EncoderConfig { layers, ..EncoderConfig::default() })?;
+        let mut enc = Encoder::load(
+            &path,
+            EncoderConfig {
+                layers,
+                ..EncoderConfig::default()
+            },
+        )?;
         for (name, prompt) in [("short", &short), ("long", &long)] {
             enc.encode_prompt(prompt)?; // warm-up for this shape
             let mut times: Vec<Duration> = Vec::new();

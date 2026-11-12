@@ -40,6 +40,10 @@ pub struct CacheConfig {
     /// Upper bound on tracked conversation turns kept in memory.
     #[serde(default = "default_max_conversations")]
     pub max_conversations: usize,
+    /// How long provider-stored response ids (`previous_response_id`,
+    /// `previous_interaction_id`) are remembered, to pin follow-ups to the same model.
+    #[serde(default = "default_state_ttl")]
+    pub state_ttl_secs: u64,
 }
 
 impl Default for CacheConfig {
@@ -48,6 +52,7 @@ impl Default for CacheConfig {
             enabled: true,
             ttl_secs: default_cache_ttl(),
             max_conversations: default_max_conversations(),
+            state_ttl_secs: default_state_ttl(),
         }
     }
 }
@@ -56,6 +61,7 @@ impl CacheConfig {
     pub fn tracker(&self) -> Option<ConversationTracker> {
         self.enabled.then(|| {
             ConversationTracker::new(Duration::from_secs(self.ttl_secs), self.max_conversations)
+                .with_state_ttl(Duration::from_secs(self.state_ttl_secs))
         })
     }
 }
@@ -70,6 +76,10 @@ fn default_cache_ttl() -> u64 {
 
 fn default_max_conversations() -> usize {
     100_000
+}
+
+fn default_state_ttl() -> u64 {
+    7 * 24 * 3600
 }
 
 fn default_lambda() -> f64 {
@@ -117,7 +127,9 @@ impl RouterConfig {
     /// `Gateway::with_router`.
     pub fn build(&self) -> Option<Arc<dyn Router>> {
         match self {
-            RouterConfig::Random { seed: Some(s) } => Some(Arc::new(RandomRouter::with_seed(*s))),
+            RouterConfig::Random { seed: Some(s) } => {
+                Some(Arc::new(RandomRouter::with_seed(*s)))
+            }
             RouterConfig::Random { seed: None } => Some(Arc::new(RandomRouter::new())),
             RouterConfig::Probe { .. } => None,
         }
@@ -138,6 +150,13 @@ pub struct ModelConfig {
     /// Where to send Anthropic Messages requests for this model.
     #[serde(default)]
     pub anthropic: Option<Upstream>,
+    /// Where to send Open Responses (`/responses`) requests for this model.
+    #[serde(default)]
+    pub responses: Option<Upstream>,
+    /// Where to send Gemini Interactions (`/interactions`) requests for this model,
+    /// e.g. `https://generativelanguage.googleapis.com/v1beta`.
+    #[serde(default)]
+    pub interactions: Option<Upstream>,
     /// Capability tier. The probe router predicts outcomes per tier and needs one.
     #[serde(default)]
     pub tier: Option<Tier>,
@@ -152,6 +171,8 @@ impl ModelConfig {
         match format {
             ApiFormat::OpenaiChat => self.openai.as_ref(),
             ApiFormat::AnthropicMessages => self.anthropic.as_ref(),
+            ApiFormat::OpenResponses => self.responses.as_ref(),
+            ApiFormat::GeminiInteractions => self.interactions.as_ref(),
         }
     }
 
@@ -228,9 +249,9 @@ impl Config {
                     m.id
                 )));
             }
-            if m.openai.is_none() && m.anthropic.is_none() {
+            if ApiFormat::ALL.iter().all(|f| m.upstream(*f).is_none()) {
                 return Err(ConfigError::Invalid(format!(
-                    "model `{}` needs an `openai` or `anthropic` upstream",
+                    "model `{}` needs at least one upstream (`openai`, `anthropic`, `responses` or `interactions`)",
                     m.id
                 )));
             }
@@ -247,7 +268,11 @@ impl Config {
         self.models
             .iter()
             .filter(|m| m.upstream(format).is_some())
-            .map(|m| Candidate::new(&m.id).with_tier(m.tier).with_pricing(m.pricing))
+            .map(|m| {
+                Candidate::new(&m.id)
+                    .with_tier(m.tier)
+                    .with_pricing(m.pricing)
+            })
             .collect()
     }
 }
@@ -311,8 +336,13 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert!(matches!(c.router, RouterConfig::Probe { lambda, n_gpu_layers: -1, .. } if lambda == 20.0));
-        assert!(c.router.build().is_none(), "probe router is built outside the core crate");
+        assert!(
+            matches!(c.router, RouterConfig::Probe { lambda, n_gpu_layers: -1, .. } if lambda == 20.0)
+        );
+        assert!(
+            c.router.build().is_none(),
+            "probe router is built outside the core crate"
+        );
         assert_eq!(c.cache.ttl_secs, 3600);
         assert!(c.cache.enabled);
         let cands = c.candidates(ApiFormat::OpenaiChat);
@@ -320,7 +350,8 @@ mod tests {
         assert_eq!(cands[0].tier, Some(Tier::Large));
 
         // Defaults: cache on, 5-minute TTL, random router.
-        let d = Config::from_toml_str("[[models]]\nid = \"x\"\nopenai = { base_url = \"u\" }\n").unwrap();
+        let d = Config::from_toml_str("[[models]]\nid = \"x\"\nopenai = { base_url = \"u\" }\n")
+            .unwrap();
         assert_eq!(d.cache, CacheConfig::default());
         assert!(d.router.build().is_some());
     }

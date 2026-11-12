@@ -41,7 +41,11 @@ impl Tier {
             Tier::Large => (4.00, 0.20, 20.00),
             Tier::Xlarge => (8.00, 0.20, 40.00),
         };
-        Pricing { input, cached_input, output }
+        Pricing {
+            input,
+            cached_input,
+            output,
+        }
     }
 }
 
@@ -72,7 +76,13 @@ mod tests {
         assert!("huge".parse::<Tier>().is_err());
         assert!(Tier::Small < Tier::Medium && Tier::Large < Tier::Xlarge);
         assert_eq!(serde_json::to_string(&Tier::Medium).unwrap(), "\"medium\"");
-        let prices: Vec<f64> = Tier::ALL.iter().map(|t| t.default_pricing().output).collect();
-        assert!(prices.windows(2).all(|w| w[0] < w[1]), "pricier with each tier");
+        let prices: Vec<f64> = Tier::ALL
+            .iter()
+            .map(|t| t.default_pricing().output)
+            .collect();
+        assert!(
+            prices.windows(2).all(|w| w[0] < w[1]),
+            "pricier with each tier"
+        );
     }
 }

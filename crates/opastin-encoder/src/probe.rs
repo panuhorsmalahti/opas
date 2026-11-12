@@ -52,7 +52,12 @@ pub struct Linear {
 
 impl Linear {
     fn apply(&self, x: &[f32]) -> f64 {
-        let dot: f64 = self.w.iter().zip(x).map(|(w, x)| f64::from(*w) * f64::from(*x)).sum();
+        let dot: f64 = self
+            .w
+            .iter()
+            .zip(x)
+            .map(|(w, x)| f64::from(*w) * f64::from(*x))
+            .sum();
         dot + f64::from(self.b)
     }
 }
@@ -89,7 +94,10 @@ pub struct Prediction {
 #[derive(Debug, thiserror::Error)]
 pub enum ProbeError {
     #[error("reading probe {path}: {source}")]
-    Io { path: String, source: std::io::Error },
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("parsing probe: {0}")]
     Parse(#[from] serde_json::Error),
     #[error("invalid probe: {0}")]
@@ -122,7 +130,10 @@ impl Probe {
         }
         let n = file.encoder.n_embd;
         for (tier, head) in &file.heads {
-            for (kind, lin) in [("success", &head.success), ("log_out_tokens", &head.log_out_tokens)] {
+            for (kind, lin) in [
+                ("success", &head.success),
+                ("log_out_tokens", &head.log_out_tokens),
+            ] {
                 if lin.w.len() != n {
                     return Err(ProbeError::Invalid(format!(
                         "{tier} {kind}: {} weights, expected n_embd = {n}",
@@ -130,7 +141,9 @@ impl Probe {
                     )));
                 }
                 if !lin.b.is_finite() || lin.w.iter().any(|w| !w.is_finite()) {
-                    return Err(ProbeError::Invalid(format!("{tier} {kind}: non-finite weights")));
+                    return Err(ProbeError::Invalid(format!(
+                        "{tier} {kind}: non-finite weights"
+                    )));
                 }
             }
         }
@@ -186,9 +199,23 @@ pub(crate) mod tests {
             },
             heads: BTreeMap::from([
                 // small: success depends on feature 0, ~200 output tokens
-                (Tier::Small, Head { success: lin([2.0, 0.0, 0.0, 0.0], 0.0), log_out_tokens: lin([0.0; 4], 201f32.ln()), extrapolated: false }),
+                (
+                    Tier::Small,
+                    Head {
+                        success: lin([2.0, 0.0, 0.0, 0.0], 0.0),
+                        log_out_tokens: lin([0.0; 4], 201f32.ln()),
+                        extrapolated: false,
+                    },
+                ),
                 // large: succeeds often, ~1000 output tokens
-                (Tier::Large, Head { success: lin([1.0, 0.0, 0.0, 0.0], 2.0), log_out_tokens: lin([0.0; 4], 1001f32.ln()), extrapolated: false }),
+                (
+                    Tier::Large,
+                    Head {
+                        success: lin([1.0, 0.0, 0.0, 0.0], 2.0),
+                        log_out_tokens: lin([0.0; 4], 1001f32.ln()),
+                        extrapolated: false,
+                    },
+                ),
             ]),
             metadata: serde_json::Value::Null,
         }
@@ -203,7 +230,10 @@ pub(crate) mod tests {
         let p = probe.predict(Tier::Large, &[1.0, 0.0, 0.0, 0.0]).unwrap();
         assert!((p.p_success - 1.0 / (1.0 + (-3.0f64).exp())).abs() < 1e-9);
         assert!(probe.predict(Tier::Medium, &[0.0; 4]).is_none());
-        assert!(probe.predict(Tier::Small, &[0.0; 3]).is_none(), "wrong dimension");
+        assert!(
+            probe.predict(Tier::Small, &[0.0; 3]).is_none(),
+            "wrong dimension"
+        );
     }
 
     #[test]
@@ -225,6 +255,9 @@ pub(crate) mod tests {
         assert!(json.contains("\"small\"") && json.contains("\"large\""));
         let probe = Probe::from_file(serde_json::from_str(&json).unwrap()).unwrap();
         assert_eq!(probe.spec().layer, 2);
-        assert_eq!(probe.tiers().collect::<Vec<_>>(), [Tier::Small, Tier::Large]);
+        assert_eq!(
+            probe.tiers().collect::<Vec<_>>(),
+            [Tier::Small, Tier::Large]
+        );
     }
 }
