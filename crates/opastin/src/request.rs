@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::api::ApiFormat;
+use crate::conversation::Conversation;
 
 /// One message, reduced to its role and text content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +27,10 @@ pub struct RouteRequest {
     pub has_tools: bool,
     /// Whether the client asked for a streamed response.
     pub stream: bool,
+    /// The conversation this request continues, if known (filled in by the gateway for
+    /// cache-aware routing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<Conversation>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -75,6 +80,7 @@ impl RouteRequest {
             messages,
             has_tools: nonempty_array(body, "tools") || nonempty_array(body, "functions"),
             stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
+            conversation: None,
         })
     }
 
@@ -112,6 +118,7 @@ impl RouteRequest {
             messages,
             has_tools: nonempty_array(body, "tools"),
             stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
+            conversation: None,
         })
     }
 

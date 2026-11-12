@@ -1,12 +1,14 @@
 //! Configuration: which models exist, where each is served, and which router to use.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::api::ApiFormat;
+use crate::conversation::{ConversationTracker, Pricing};
 use crate::router::{Candidate, RandomRouter, Router};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +22,61 @@ pub struct Config {
     pub router_model: String,
     #[serde(default)]
     pub router: RouterConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
     pub models: Vec<ModelConfig>,
+}
+
+/// Cache-aware routing: track which model served each conversation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// How long a provider's prompt cache is assumed to stay warm.
+    #[serde(default = "default_cache_ttl")]
+    pub ttl_secs: u64,
+    /// Upper bound on tracked conversation turns kept in memory.
+    #[serde(default = "default_max_conversations")]
+    pub max_conversations: usize,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ttl_secs: default_cache_ttl(),
+            max_conversations: default_max_conversations(),
+        }
+    }
+}
+
+impl CacheConfig {
+    pub fn tracker(&self) -> Option<ConversationTracker> {
+        self.enabled.then(|| {
+            ConversationTracker::new(Duration::from_secs(self.ttl_secs), self.max_conversations)
+        })
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_cache_ttl() -> u64 {
+    300
+}
+
+fn default_max_conversations() -> usize {
+    100_000
+}
+
+fn default_lambda() -> f64 {
+    10.0
+}
+
+fn default_gpu_layers() -> i32 {
+    -1
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,6 +87,21 @@ pub enum RouterConfig {
         #[serde(default)]
         seed: Option<u64>,
     },
+    /// Activation probe: runs a local encoder model and a trained linear probe
+    /// (opastin-encoder). Built by opastin-server, not by this crate.
+    Probe {
+        /// GGUF encoder model, e.g. `models/gguf/Qwen3.5-9B-Q8_0.gguf`.
+        encoder_model: PathBuf,
+        /// Probe weights exported by `probe/train_probe.py`.
+        probe: PathBuf,
+        /// Success probability traded per USD of expected cost: route to
+        /// `argmax p − lambda × (cost + switch_cost)`.
+        #[serde(default = "default_lambda")]
+        lambda: f64,
+        /// Encoder layers offloaded to the GPU (negative = all).
+        #[serde(default = "default_gpu_layers")]
+        n_gpu_layers: i32,
+    },
 }
 
 impl Default for RouterConfig {
@@ -40,10 +111,14 @@ impl Default for RouterConfig {
 }
 
 impl RouterConfig {
-    pub fn build(&self) -> Arc<dyn Router> {
+    /// Build a router implemented in this crate. Returns `None` for routers that need
+    /// another crate (the probe router); build those yourself and use
+    /// `Gateway::with_router`.
+    pub fn build(&self) -> Option<Arc<dyn Router>> {
         match self {
-            RouterConfig::Random { seed: Some(s) } => Arc::new(RandomRouter::with_seed(*s)),
-            RouterConfig::Random { seed: None } => Arc::new(RandomRouter::new()),
+            RouterConfig::Random { seed: Some(s) } => Some(Arc::new(RandomRouter::with_seed(*s))),
+            RouterConfig::Random { seed: None } => Some(Arc::new(RandomRouter::new())),
+            RouterConfig::Probe { .. } => None,
         }
     }
 }
@@ -62,6 +137,12 @@ pub struct ModelConfig {
     /// Where to send Anthropic Messages requests for this model.
     #[serde(default)]
     pub anthropic: Option<Upstream>,
+    /// Prices in USD per million tokens, used by cache-aware routing to price a switch.
+    #[serde(default)]
+    pub pricing: Option<Pricing>,
+    /// Name of the probe head that predicts this model (probe router). Defaults to `id`.
+    #[serde(default)]
+    pub probe_head: Option<String>,
 }
 
 impl ModelConfig {
@@ -164,7 +245,7 @@ impl Config {
         self.models
             .iter()
             .filter(|m| m.upstream(format).is_some())
-            .map(|m| Candidate::new(&m.id))
+            .map(|m| Candidate::new(&m.id).with_pricing(m.pricing))
             .collect()
     }
 }
@@ -205,6 +286,40 @@ mod tests {
         };
         assert_eq!(ids(ApiFormat::OpenaiChat), ["big", "small"]);
         assert_eq!(ids(ApiFormat::AnthropicMessages), ["big"]);
+    }
+
+    #[test]
+    fn parses_cache_pricing_and_probe_router() {
+        let c = Config::from_toml_str(
+            r#"
+            [router]
+            kind = "probe"
+            encoder_model = "models/gguf/enc.gguf"
+            probe = "models/probes/p.json"
+            lambda = 20.0
+
+            [cache]
+            ttl_secs = 3600
+
+            [[models]]
+            id = "gpt-5"
+            probe_head = "gpt-5"
+            pricing = { input = 1.25, cached_input = 0.125, output = 10.0 }
+            openai = { base_url = "u" }
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(c.router, RouterConfig::Probe { lambda, n_gpu_layers: -1, .. } if lambda == 20.0));
+        assert!(c.router.build().is_none(), "probe router is built outside the core crate");
+        assert_eq!(c.cache.ttl_secs, 3600);
+        assert!(c.cache.enabled);
+        let cands = c.candidates(ApiFormat::OpenaiChat);
+        assert_eq!(cands[0].pricing.unwrap().cached_input, 0.125);
+
+        // Defaults: cache on, 5-minute TTL, random router.
+        let d = Config::from_toml_str("[[models]]\nid = \"x\"\nopenai = { base_url = \"u\" }\n").unwrap();
+        assert_eq!(d.cache, CacheConfig::default());
+        assert!(d.router.build().is_some());
     }
 
     #[test]

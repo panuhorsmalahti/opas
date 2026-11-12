@@ -10,8 +10,14 @@ rust-version.workspace = true
 name = "opastin"
 path = "src/main.rs"
 
+[features]
+default = ["probe"]
+# Activation-probe router: links llama.cpp (needs cmake to build).
+probe = ["dep:opastin-encoder"]
+
 [dependencies]
 opastin = { path = "../opastin", features = ["gateway"] }
+opastin-encoder = { path = "../opastin-encoder", optional = true }
 axum.workspace = true
 bytes.workspace = true
 clap.workspace = true

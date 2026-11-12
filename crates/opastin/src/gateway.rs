@@ -7,7 +7,8 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
 use crate::api::ApiFormat;
-use crate::config::{Config, Upstream};
+use crate::config::{Config, ConfigError, Upstream};
+use crate::conversation::{ConversationTracker, PrefixKeys};
 use crate::request::{RequestError, RouteRequest};
 use crate::router::{Decision, RouteError, Router};
 
@@ -50,25 +51,32 @@ pub struct Forwarded {
     pub model: String,
     /// The routing decision, if the client asked for the router model.
     pub decision: Option<Decision>,
+    /// The conversation this request continued, if cache-aware routing recognized it.
+    pub conversation: Option<crate::Conversation>,
 }
 
 /// Routes requests and forwards them to the chosen model's upstream.
 pub struct Gateway {
     config: Config,
     router: Arc<dyn Router>,
+    tracker: Option<ConversationTracker>,
     http: reqwest::Client,
 }
 
 impl Gateway {
-    /// Build with the router named in `config.router`.
-    pub fn new(config: Config) -> Self {
-        let router = config.router.build();
-        Self::with_router(config, router)
+    /// Build with the router named in `config.router`. Fails for routers this crate
+    /// cannot build (the probe router); use [`Gateway::with_router`] for those.
+    pub fn new(config: Config) -> Result<Self, ConfigError> {
+        let router = config.router.build().ok_or_else(|| {
+            ConfigError::Invalid("this router kind must be built by the caller (Gateway::with_router)".into())
+        })?;
+        Ok(Self::with_router(config, router))
     }
 
     /// Build with a custom router.
     pub fn with_router(config: Config, router: Arc<dyn Router>) -> Self {
         Self {
+            tracker: config.cache.tracker(),
             config,
             router,
             http: reqwest::Client::new(),
@@ -84,10 +92,23 @@ impl Gateway {
     }
 
     /// Choose a model for a request body without sending it anywhere.
+    ///
+    /// With cache-aware routing on, the request is matched against earlier turns; the
+    /// router sees the previous model in `RouteRequest::conversation`, and the decision
+    /// is recorded so the next turn can find it.
     pub async fn decide(&self, format: ApiFormat, body: &Value) -> Result<Decision, GatewayError> {
-        let request = RouteRequest::from_json(format, body)?;
+        let mut request = RouteRequest::from_json(format, body)?;
+        let keys = self.tracker.as_ref().map(|_| PrefixKeys::new(format, body));
+        if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
+            request.conversation = tracker.lookup(keys);
+        }
         let candidates = self.config.candidates(format);
-        Ok(self.router.route(&request, &candidates).await?)
+        let mut decision = self.router.route(&request, &candidates).await?;
+        if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
+            tracker.record(keys, &decision.model);
+        }
+        decision.conversation = request.conversation;
+        Ok(decision)
     }
 
     /// Send a request upstream. If its `model` is the router model, route it first;
@@ -104,11 +125,22 @@ impl Gateway {
             .ok_or_else(|| GatewayError::BadRequest("missing `model` field".into()))?
             .to_owned();
 
-        let (model_id, decision) = if requested == self.config.router_model {
+        let (model_id, decision, conversation) = if requested == self.config.router_model {
             let decision = self.decide(format, &body).await?;
-            (decision.model.clone(), Some(decision))
+            let conversation = decision.conversation.clone();
+            (decision.model.clone(), Some(decision), conversation)
         } else {
-            (requested, None)
+            // Direct requests also update the tracker, so a later routed turn of the same
+            // conversation knows which model's cache is warm.
+            let conversation = self.tracker.as_ref().and_then(|t| {
+                let keys = PrefixKeys::new(format, &body);
+                let conversation = t.lookup(&keys);
+                if self.config.model(&requested).is_some() {
+                    t.record(&keys, &requested);
+                }
+                conversation
+            });
+            (requested, None, conversation)
         };
 
         let model = self
@@ -142,6 +174,7 @@ impl Gateway {
             response,
             model: model_id,
             decision,
+            conversation,
         })
     }
 }

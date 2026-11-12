@@ -27,12 +27,14 @@
 
 pub mod api;
 pub mod config;
+pub mod conversation;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod request;
 pub mod router;
 
 pub use api::ApiFormat;
-pub use config::{Config, ConfigError, ModelConfig, RouterConfig, Upstream};
+pub use config::{CacheConfig, Config, ConfigError, ModelConfig, RouterConfig, Upstream};
+pub use conversation::{Conversation, ConversationTracker, Pricing};
 pub use request::{Message, RequestError, RouteRequest};
 pub use router::{Candidate, RandomRouter, Decision, RouteError, Router};

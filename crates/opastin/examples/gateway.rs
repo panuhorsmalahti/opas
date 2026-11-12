@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "opastin.example.toml".into());
     let config = Config::load(&path)?;
     let router_model = config.router_model.clone();
-    let gateway = Gateway::new(config);
+    let gateway = Gateway::new(config)?;
 
     let body = json!({
         "model": router_model,

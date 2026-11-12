@@ -83,7 +83,7 @@ async fn harness() -> Harness {
     ))
     .unwrap();
     Harness {
-        app: opastin_server::app(Arc::new(Gateway::new(config))),
+        app: opastin_server::app(Arc::new(Gateway::new(config).unwrap())),
         upstream_calls: calls,
     }
 }
@@ -332,4 +332,63 @@ async fn models_endpoint_lists_router_and_configured_models() {
     let body = json_body(&body);
     assert_eq!(body["data"][0]["type"], "model");
     assert_eq!(body["has_more"], false);
+}
+
+#[tokio::test]
+async fn cache_aware_routing_keeps_a_conversation_on_one_model() {
+    let h = harness().await;
+    // Ten independent conversations: each turn 2 must go to the model that served turn 1,
+    // even though the random choice would otherwise pick at random.
+    for i in 0..10 {
+        let first_user = json!({"role": "user", "content": format!("task {i}: refactor the parser")});
+        let (status, headers, _) = send(
+            &h.app,
+            req(
+                "/v1/messages",
+                json!({"model": "auto", "max_tokens": 10, "system": "agent", "messages": [first_user.clone()]}),
+                &[],
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let first = headers["x-opastin-model"].to_str().unwrap().to_owned();
+        assert!(!headers.contains_key("x-opastin-previous-model"), "turn 1 is new");
+
+        let (status, headers, _) = send(
+            &h.app,
+            req(
+                "/v1/messages",
+                json!({"model": "auto", "max_tokens": 10, "system": "agent", "messages": [
+                    first_user,
+                    {"role": "assistant", "content": "Looking at parser.rs"},
+                    {"role": "user", "content": "go on"}
+                ]}),
+                &[],
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers["x-opastin-model"], first.as_str(), "turn 2 stays on the cached model");
+        assert_eq!(headers["x-opastin-previous-model"], first.as_str());
+    }
+}
+
+#[tokio::test]
+async fn route_endpoint_reports_the_continued_conversation() {
+    let h = harness().await;
+    let turn1 = json!({"model": "auto", "messages": [{"role": "user", "content": "hello"}]});
+    let (_, _, body) = send(&h.app, req("/v1/route", json!({"api": "openai_chat", "request": turn1}), &[])).await;
+    let first = json_body(&body)["model"].as_str().unwrap().to_owned();
+    assert!(json_body(&body).get("conversation").map_or(true, Value::is_null));
+
+    let turn2 = json!({"model": "auto", "messages": [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": "more"}
+    ]});
+    let (_, _, body) = send(&h.app, req("/v1/route", json!({"api": "openai_chat", "request": turn2}), &[])).await;
+    let body = json_body(&body);
+    assert_eq!(body["model"], first.as_str());
+    assert_eq!(body["conversation"]["previous_model"], first.as_str());
+    assert!(body["conversation"]["cached_tokens"].as_u64().unwrap() > 0);
 }

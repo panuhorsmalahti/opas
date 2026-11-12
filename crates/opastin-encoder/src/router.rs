@@ -2,7 +2,12 @@
 //!
 //! For each request: run the encoder's prefill (no generation), take the pooled hidden
 //! state at the probe's layer, predict each candidate's success probability `p̂` and
-//! expected cost `ĉ` (USD), and pick `argmax p̂ − λ·ĉ`.
+//! expected cost `ĉ` (USD), and pick `argmax p̂ − λ·(ĉ + switch)`.
+//!
+//! Cache-aware: when the request continues a conversation, `switch` is the extra input
+//! cost a candidate pays because the provider's prompt cache is warm only at the model
+//! that served the previous turn (see `opastin::conversation::switch_cost`). It is zero
+//! for that model and for candidates without configured pricing.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,14 +35,16 @@ pub struct Scored {
     pub candidate: String,
     pub head: String,
     pub prediction: Prediction,
-    /// `p_success − λ·cost`.
+    /// Extra USD from losing the prompt cache by switching to this candidate.
+    pub switch_cost: f64,
+    /// `p_success − λ·(cost + switch_cost)`.
     pub score: f64,
 }
 
 /// Score candidates and return them best first.
 pub fn rank(mut scored: Vec<Scored>, lambda: f64) -> Vec<Scored> {
     for s in &mut scored {
-        s.score = s.prediction.p_success - lambda * s.prediction.cost;
+        s.score = s.prediction.p_success - lambda * (s.prediction.cost + s.switch_cost);
     }
     scored.sort_by(|a, b| b.score.total_cmp(&a.score));
     scored
@@ -151,9 +158,9 @@ impl ProbeRouter {
         request: &RouteRequest,
         candidates: &[Candidate],
     ) -> Result<Vec<Scored>, RouteError> {
-        let usable: Vec<(String, String)> = candidates
+        let usable: Vec<(&Candidate, String)> = candidates
             .iter()
-            .filter_map(|c| self.head_for(&c.id).map(|h| (c.id.clone(), h)))
+            .filter_map(|c| self.head_for(&c.id).map(|h| (c, h)))
             .collect();
         if usable.is_empty() {
             return Err(if candidates.is_empty() {
@@ -167,7 +174,13 @@ impl ProbeRouter {
             .into_iter()
             .map(|(candidate, head)| {
                 let prediction = self.inner.probe.predict(&head, &features).expect("validated head");
-                Scored { candidate, head, prediction, score: 0.0 }
+                Scored {
+                    candidate: candidate.id.clone(),
+                    head,
+                    prediction,
+                    switch_cost: opastin::conversation::switch_cost(candidate, request.conversation.as_ref()),
+                    score: 0.0,
+                }
             })
             .collect();
         Ok(rank(scored, self.inner.lambda))
@@ -198,8 +211,12 @@ impl Router for ProbeRouter {
             .iter()
             .map(|s| {
                 format!(
-                    "{}: p={:.2} cost=${:.4} score={:.3}",
-                    s.candidate, s.prediction.p_success, s.prediction.cost, s.score
+                    "{}: p={:.2} cost=${:.4}{} score={:.3}",
+                    s.candidate,
+                    s.prediction.p_success,
+                    s.prediction.cost,
+                    if s.switch_cost > 0.0 { format!(" +switch ${:.4}", s.switch_cost) } else { String::new() },
+                    s.score
                 )
             })
             .collect::<Vec<_>>()
@@ -209,6 +226,7 @@ impl Router for ProbeRouter {
             router: "probe".into(),
             model: best.candidate.clone(),
             reason: format!("lambda={}; {reason}", self.inner.lambda),
+            conversation: None,
         })
     }
 }
@@ -222,8 +240,21 @@ mod tests {
             candidate: name.into(),
             head: name.into(),
             prediction: Prediction { p_success: p, cost },
+            switch_cost: 0.0,
             score: 0.0,
         }
+    }
+
+    #[test]
+    fn switch_cost_keeps_a_conversation_on_its_cached_model() {
+        // Mid-conversation: cheap would win on its own (see below), but 200k cached
+        // tokens at the strong model make switching cost 200k × $2.7/M = $0.54 extra.
+        let mut cheap = scored("cheap", 0.70, 0.001);
+        cheap.switch_cost = 0.54;
+        let r = rank(vec![scored("strong", 0.90, 0.050), cheap], 10.0);
+        assert_eq!(r[0].candidate, "strong");
+        // Without the cache penalty the cheap model wins at the same λ.
+        assert_eq!(rank(vec![scored("strong", 0.90, 0.050), scored("cheap", 0.70, 0.001)], 10.0)[0].candidate, "cheap");
     }
 
     #[test]

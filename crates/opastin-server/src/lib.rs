@@ -27,6 +27,9 @@ pub const HEADER_MODEL: &str = "x-opastin-model";
 pub const HEADER_DECISION_ID: &str = "x-opastin-decision-id";
 /// Response header: router name, present only on routed requests.
 pub const HEADER_ROUTER: &str = "x-opastin-router";
+/// Response header: model that served the previous turn of this conversation, present
+/// when cache-aware routing recognized the request as a continuation.
+pub const HEADER_PREVIOUS_MODEL: &str = "x-opastin-previous-model";
 
 /// Request bodies can carry long contexts and images.
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -97,6 +100,9 @@ async fn proxy(gw: &Gateway, format: ApiFormat, headers: &HeaderMap, body: &[u8]
         insert_header(out, HEADER_DECISION_ID, &d.decision_id);
         insert_header(out, HEADER_ROUTER, &d.router);
     }
+    if let Some(c) = &forwarded.conversation {
+        insert_header(out, HEADER_PREVIOUS_MODEL, &c.previous_model);
+    }
 
     // Stream the upstream body through unchanged, so SSE responses stay streamed.
     response
@@ -144,6 +150,7 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
                 "upstream_model": upstream_model,
                 "reason": d.reason,
                 "api": parsed.api,
+                "conversation": d.conversation,
             }))
             .into_response()
         }

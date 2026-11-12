@@ -899,6 +899,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "opastin",
+ "opastin-encoder",
  "serde",
  "serde_json",
  "tokio",

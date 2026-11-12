@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use opastin::gateway::Gateway;
-use opastin::Config;
+use opastin::{Config, RouterConfig};
 use tracing_subscriber::EnvFilter;
 
 /// opastin: an LLM router with OpenAI- and Anthropic-compatible endpoints.
@@ -43,10 +43,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let listen = config.listen.clone();
-    let gateway = Gateway::new(config);
+    let gateway = build_gateway(config)?;
     tracing::info!(
         router = gateway.router().name(),
         router_model = %gateway.config().router_model,
+        cache_aware = gateway.config().cache.enabled,
         models = ?gateway.config().models.iter().map(|m| &m.id).collect::<Vec<_>>(),
         "starting"
     );
@@ -59,4 +60,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
     Ok(())
+}
+
+/// The probe router needs the llama.cpp encoder (feature `probe`); other routers are
+/// built by the core crate.
+fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> {
+    match &config.router {
+        #[cfg(feature = "probe")]
+        RouterConfig::Probe {
+            encoder_model,
+            probe,
+            lambda,
+            n_gpu_layers,
+        } => {
+            let heads = config
+                .models
+                .iter()
+                .map(|m| (m.id.clone(), m.probe_head.clone().unwrap_or_else(|| m.id.clone())))
+                .collect();
+            tracing::info!(encoder = %encoder_model.display(), probe = %probe.display(), lambda, "loading probe router");
+            let router = opastin_encoder::ProbeRouter::load(encoder_model, probe, heads, *lambda, *n_gpu_layers)?;
+            Ok(Gateway::with_router(config, Arc::new(router)))
+        }
+        #[cfg(not(feature = "probe"))]
+        RouterConfig::Probe { .. } => {
+            Err("the probe router needs opastin-server built with the `probe` feature".into())
+        }
+        _ => Ok(Gateway::new(config)?),
+    }
 }

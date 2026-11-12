@@ -7,18 +7,27 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
+use crate::conversation::{Conversation, Pricing};
 use crate::request::RouteRequest;
 
 /// A model the router may choose.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
     /// Model id as exposed by the router (matches a configured model id).
     pub id: String,
+    /// Prices, if configured; used by cache-aware routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<Pricing>,
 }
 
 impl Candidate {
     pub fn new(id: impl Into<String>) -> Self {
-        Self { id: id.into() }
+        Self { id: id.into(), pricing: None }
+    }
+
+    pub fn with_pricing(mut self, pricing: Option<Pricing>) -> Self {
+        self.pricing = pricing;
+        self
     }
 }
 
@@ -39,6 +48,9 @@ pub struct Decision {
     pub model: String,
     /// Human-readable explanation.
     pub reason: String,
+    /// The conversation this request continued, if any (set by the gateway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<Conversation>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -66,6 +78,10 @@ pub trait Router: Send + Sync {
 }
 
 /// Picks a candidate uniformly at random. With two candidates, a random choice.
+///
+/// Cache-aware: when the request continues a conversation whose previous model is a
+/// candidate, it stays on that model. A random switch has no expected quality benefit
+/// and would only lose the provider's prompt cache.
 ///
 /// Useful as a baseline: a real router should beat random routing at equal cost.
 pub struct RandomRouter {
@@ -102,11 +118,25 @@ impl Router for RandomRouter {
 
     async fn route(
         &self,
-        _request: &RouteRequest,
+        request: &RouteRequest,
         candidates: &[Candidate],
     ) -> Result<Decision, RouteError> {
         if candidates.is_empty() {
             return Err(RouteError::NoCandidates);
+        }
+        if let Some(conv) = &request.conversation {
+            if candidates.iter().any(|c| c.id == conv.previous_model) {
+                return Ok(Decision {
+                    decision_id: uuid::Uuid::new_v4().to_string(),
+                    router: self.name().to_owned(),
+                    model: conv.previous_model.clone(),
+                    reason: format!(
+                        "cache-aware: continuing on the previous model (~{} cached prompt tokens)",
+                        conv.cached_tokens
+                    ),
+                    conversation: None,
+                });
+            }
         }
         let index = {
             let mut rng = self.rng.lock().unwrap_or_else(|p| p.into_inner());
@@ -117,6 +147,7 @@ impl Router for RandomRouter {
             router: self.name().to_owned(),
             model: candidates[index].id.clone(),
             reason: format!("uniform random pick from {} candidates", candidates.len()),
+            conversation: None,
         })
     }
 }
@@ -134,7 +165,25 @@ mod tests {
             messages: vec![],
             has_tools: false,
             stream: false,
+            conversation: None,
         }
+    }
+
+    #[tokio::test]
+    async fn continues_a_conversation_on_its_previous_model() {
+        let router = RandomRouter::with_seed(1);
+        let candidates = [Candidate::from("a"), Candidate::from("b"), Candidate::from("c")];
+        let mut req = request();
+        req.conversation = Some(crate::Conversation { previous_model: "b".into(), cached_tokens: 5000 });
+        for _ in 0..50 {
+            let d = router.route(&req, &candidates).await.unwrap();
+            assert_eq!(d.model, "b");
+            assert!(d.reason.contains("cache-aware"));
+        }
+        // Previous model no longer a candidate: back to a random pick.
+        req.conversation.as_mut().unwrap().previous_model = "gone".into();
+        let d = router.route(&req, &candidates).await.unwrap();
+        assert!(d.reason.contains("uniform random"));
     }
 
     #[tokio::test]
