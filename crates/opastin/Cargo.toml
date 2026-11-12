@@ -1,6 +1,7 @@
 [package]
 name = "opastin"
 description = "Model routing for LLM requests: pick a model per request, use it in-process or behind an OpenAI/Anthropic-compatible gateway"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
