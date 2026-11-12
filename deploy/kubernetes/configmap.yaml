@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opastin-config
+data:
+  opastin.toml: |
+    # See opastin.example.toml for all options.
+    listen = "0.0.0.0:8080"
+    router_model = "auto"
+
+    [router]
+    kind = "random"
+
+    # Cache-aware routing: conversation state is kept in memory per pod, so run one
+    # replica or keep clients on one pod (the Service uses ClientIP session affinity).
+    [cache]
+    ttl_secs = 300
+
+    [[models]]
+    id = "claude-opus-5-5"
+    tier = "large"
+    anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+    openai = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+
+    [[models]]
+    id = "claude-haiku-5-5"
+    tier = "small"
+    anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+    openai = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }

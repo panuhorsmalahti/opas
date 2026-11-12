@@ -1,0 +1,17 @@
+opastin is running as {{ include "opastin.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+Try it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "opastin.fullname" . }} 8080:{{ .Values.service.port }}
+  curl localhost:8080/v1/route -H 'content-type: application/json' \
+    -d '{"api": "openai_chat", "request": {"model": "auto", "messages": [{"role": "user", "content": "hi"}]}}'
+
+{{- if not (or .Values.apiKeys.existingSecret .Values.apiKeys.values) }}
+
+No API keys configured: requests are forwarded with the client's own credentials.
+Set apiKeys.existingSecret or apiKeys.values to use server-side keys.
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+
+Note: cache-aware routing state is per pod. Keep service.sessionAffinity=ClientIP
+(or another sticky load balancer) so a conversation stays on one pod.
+{{- end }}

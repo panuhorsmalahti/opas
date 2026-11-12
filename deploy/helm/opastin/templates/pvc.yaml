@@ -1,0 +1,17 @@
+{{- if and .Values.models.persistence.enabled (not .Values.models.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "opastin.modelsClaim" . }}
+  labels:
+    {{- include "opastin.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.models.persistence.accessModes | nindent 4 }}
+  {{- with .Values.models.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.models.persistence.size }}
+{{- end }}

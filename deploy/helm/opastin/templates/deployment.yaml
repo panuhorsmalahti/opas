@@ -1,0 +1,123 @@
+{{- $models := or .Values.models.persistence.enabled .Values.models.download }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "opastin.fullname" . }}
+  labels:
+    {{- include "opastin.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "opastin.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ .Values.config | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "opastin.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "opastin.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.models.download }}
+      initContainers:
+        - name: fetch-models
+          image: {{ $.Values.models.downloadImage }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              {{- range . }}
+              if [ ! -s "{{ $.Values.models.mountPath }}/{{ .path }}" ]; then
+                mkdir -p "$(dirname "{{ $.Values.models.mountPath }}/{{ .path }}")"
+                curl -fL --retry 5 -o "{{ $.Values.models.mountPath }}/{{ .path }}.part" "{{ .url }}"
+                mv "{{ $.Values.models.mountPath }}/{{ .path }}.part" "{{ $.Values.models.mountPath }}/{{ .path }}"
+              fi
+              {{- end }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: {{ $.Values.models.mountPath }}
+      {{- end }}
+      containers:
+        - name: opastin
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/etc/opastin/opastin.toml"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: {{ include "opastin.secretName" . }}
+                optional: true
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          # Loading an encoder model can take a while on first start.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 120
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/opastin
+              readOnly: true
+            {{- if $models }}
+            - name: models
+              mountPath: {{ .Values.models.mountPath }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "opastin.fullname" . }}
+        {{- if $models }}
+        - name: models
+          {{- if .Values.models.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "opastin.modelsClaim" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

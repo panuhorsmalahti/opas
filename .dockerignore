@@ -1,0 +1,8 @@
+target/
+data/
+models/
+training/
+docs/
+.git/
+**/.venv/
+**/__pycache__/

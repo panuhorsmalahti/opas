@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install llama.cpp build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux builds llama.cpp for CPU; macOS (Apple Silicon) builds it with Metal.
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install llama.cpp build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev
+      - uses: Swatinem/rust-cache@v2
+      # Model-backed encoder tests skip without OPASTIN_TEST_MODEL.
+      - run: cargo test --workspace --all-features
+      - name: Build release binaries
+        run: cargo build --release -p opastin-server -p opastin-encoder
+
+  minimal:
+    name: Server without the probe router
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # No llama.cpp / cmake needed for the random-router-only build.
+      - run: cargo build -p opastin-server --no-default-features
+      - run: cargo test -p opastin -p opastin-server --no-default-features --features opastin/gateway
+
+  training:
+    name: Training tools (Python)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install (without the Apple-only MLX reference group)
+        working-directory: training
+        run: uv sync --locked
+      - name: Compile check
+        working-directory: training
+        run: uv run python -m py_compile prepare_llmrouterbench.py train_probe.py reference/*.py
+
+  helm:
+    name: Helm chart and Kubernetes manifests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/helm/opastin
+      - run: helm template opastin deploy/helm/opastin > /dev/null
+      - name: Render with the probe router and model storage enabled
+        run: >
+          helm template opastin deploy/helm/opastin
+          --set models.persistence.enabled=true
+          --set ingress.enabled=true > /dev/null
+      - name: Kustomize build
+        run: kubectl kustomize deploy/kubernetes > /dev/null
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: opastin:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
