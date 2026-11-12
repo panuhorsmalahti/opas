@@ -48,6 +48,19 @@ def heat(v):
     return "rgb(244,114,182)"
 
 
+def connector(x1, x2, y):
+    """Straight arrow across the gap between two cards: dot, shaft, solid head."""
+    # Horizontal lines have a zero-height bounding box, so the gradient must use
+    # absolute (userSpaceOnUse) coordinates or the stroke does not render.
+    gid = f"conn{int(x1)}"
+    add(f'<linearGradient id="{gid}" gradientUnits="userSpaceOnUse" x1="{x1}" y1="{y}" x2="{x2}" y2="{y}">'
+        f'<stop offset="0" stop-color="{TEAL}"/><stop offset="1" stop-color="{VIOLET}"/></linearGradient>')
+    add(f'<circle cx="{x1 + 3}" cy="{y}" r="3.5" fill="{TEAL}"/>')
+    add(f'<line x1="{x1 + 3}" y1="{y}" x2="{x2 - 11}" y2="{y}" stroke="url(#{gid})" stroke-width="3.5" '
+        f'stroke-linecap="round"/>')
+    add(f'<path d="M{x2 - 13},{y - 7} L{x2},{y} L{x2 - 13},{y + 7} z" fill="{VIOLET}" filter="url(#glowSoft)"/>')
+
+
 def arrow(x1, y1, x2, y2, bend=0.0):
     mx, my = (x1 + x2) / 2, (y1 + y2) / 2 + bend
     add(f'<path d="M{x1},{y1} Q{mx},{my} {x2},{y2}" fill="none" stroke="url(#flow)" '
@@ -255,9 +268,9 @@ text(x4 + 70, cy + 24, "cache-aware", 14, AMBER, 700)
 text(x4 + 70, cy + 43, "warm prompt cache costs less", 12, MUTED, 400)
 
 # --- arrows between stages -------------------------------------------------------------
-arrow(x1 + w1 + 6, TOP + CH / 2 - 40, x2 - 12, TOP + CH / 2 - 40, -6)
+connector(x1 + w1 + 8, x2 - 6, TOP + CH / 2 - 40)
 arrow(vx + 32, vy + 76, x3 - 10, TOP + 300, 10)
-arrow(x3 + w3 + 8, TOP + 300, x4 - 10, TOP + 309, -6)
+connector(x3 + w3 + 8, x4 - 6, TOP + 230 + 56 + 23)
 
 text(W / 2, H - 30, "OpenAI · Anthropic · Open Responses · Gemini Interactions   ·   "
      "quality / speed / cost weights per request   ·   cache-aware", 14, FAINT, 500, "middle", extra='letter-spacing="0.3"')

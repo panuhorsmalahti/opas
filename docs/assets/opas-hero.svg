@@ -440,8 +440,14 @@
 <path d="M1301.00,631.34 A10,10 0 1,1 1289.57,632.34" fill="none" stroke="#fbbf24" stroke-width="2.4" stroke-linecap="round" marker-end="url(#cacheHead)"/>
 <text x="1320" y="636" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#fbbf24" text-anchor="start" >cache-aware</text>
 <text x="1320" y="655" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#a8b3d6" text-anchor="start" >warm prompt cache costs less</text>
-<path d="M346,380.0 Q367.0,374.0 388,380.0" fill="none" stroke="url(#flow)" stroke-width="3.5" stroke-linecap="round" marker-end="url(#head)" filter="url(#glowSoft)"/>
+<linearGradient id="conn348" gradientUnits="userSpaceOnUse" x1="348" y1="380.0" x2="394" y2="380.0"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+<circle cx="351" cy="380.0" r="3.5" fill="#2dd4bf"/>
+<line x1="351" y1="380.0" x2="383" y2="380.0" stroke="url(#conn348)" stroke-width="3.5" stroke-linecap="round"/>
+<path d="M381,373.0 L394,380.0 L381,387.0 z" fill="#8b5cf6" filter="url(#glowSoft)"/>
 <path d="M782,352 Q816.0,411.0 850,450" fill="none" stroke="url(#flow)" stroke-width="3.5" stroke-linecap="round" marker-end="url(#head)" filter="url(#glowSoft)"/>
-<path d="M1198,450 Q1219.0,448.5 1240,459" fill="none" stroke="url(#flow)" stroke-width="3.5" stroke-linecap="round" marker-end="url(#head)" filter="url(#glowSoft)"/>
+<linearGradient id="conn1198" gradientUnits="userSpaceOnUse" x1="1198" y1="459" x2="1244" y2="459"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+<circle cx="1201" cy="459" r="3.5" fill="#2dd4bf"/>
+<line x1="1201" y1="459" x2="1233" y2="459" stroke="url(#conn1198)" stroke-width="3.5" stroke-linecap="round"/>
+<path d="M1231,452 L1244,459 L1231,466 z" fill="#8b5cf6" filter="url(#glowSoft)"/>
 <text x="800.0" y="730" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#6c7aa8" text-anchor="middle" letter-spacing="0.3">OpenAI · Anthropic · Open Responses · Gemini Interactions   ·   quality / speed / cost weights per request   ·   cache-aware</text>
 </svg>
