@@ -1,0 +1,35 @@
+# opastin example config. Copy to opastin.toml and adjust.
+
+# Address the server listens on (override with --listen or OPASTIN_LISTEN).
+listen = "127.0.0.1:8080"
+
+# Clients send this as `model` to get a routed request. Sending a configured model id
+# instead skips routing and goes straight to that model.
+router_model = "auto"
+
+[router]
+kind = "random"   # uniform random choice between the candidate models
+# seed = 42         # uncomment for a reproducible sequence of choices
+
+# Each model lists where to send OpenAI Chat Completions requests (`openai`) and/or
+# Anthropic Messages requests (`anthropic`). A model is a routing candidate only for
+# the formats it has an upstream for. `base_url` ends in the API version (`/v1`).
+# `api_key_env` names the env var holding the upstream key; leave it out to pass the
+# client's own credentials through.
+
+[[models]]
+id = "claude-opus-5-5"
+anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+openai = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+
+[[models]]
+id = "claude-haiku-5-5"
+anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+openai = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+
+# A model served by another provider, under a local alias:
+# [[models]]
+# id = "glm"
+# upstream_model = "z-ai/glm-5.3"
+# openai = { base_url = "https://openrouter.ai/api/v1", api_key_env = "OPENROUTER_API_KEY" }
+# anthropic = { base_url = "https://openrouter.ai/api/v1", api_key_env = "OPENROUTER_API_KEY" }

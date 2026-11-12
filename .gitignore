@@ -1,0 +1,12 @@
+target/
+
+# Model weights and local Python environments are installed locally, never committed.
+models/
+.venv/
+
+# Extracted activations and probe outputs
+probe/out/
+__pycache__/
+
+# Downloaded datasets (fetched by scripts/, never committed)
+data/
