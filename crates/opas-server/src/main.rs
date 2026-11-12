@@ -33,12 +33,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for model in &config.models {
-        for upstream in [&model.openai, &model.anthropic].into_iter().flatten() {
-            if let Some(var) = &upstream.api_key_env {
-                if std::env::var_os(var).is_none() {
-                    tracing::warn!(model = %model.id, %var, "API key variable is not set; requests to this upstream will fail");
-                }
-            }
+        let mut vars: Vec<&str> = [
+            &model.openai,
+            &model.anthropic,
+            &model.responses,
+            &model.interactions,
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|u| u.api_key_env.as_deref())
+        .filter(|var| std::env::var_os(var).is_none())
+        .collect();
+        vars.sort_unstable();
+        vars.dedup();
+        for var in vars {
+            tracing::warn!(model = %model.id, %var, "API key variable is not set; requests to this model will fail");
         }
     }
 
