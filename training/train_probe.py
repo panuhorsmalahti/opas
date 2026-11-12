@@ -1,23 +1,33 @@
-"""Train opastin's activation probe on LLMRouterBench and evaluate it as a router.
+"""Train opastin's tier probe on LLMRouterBench activations and evaluate it as a router.
 
 Inputs (see README "Training the probe"):
   data/llmrouterbench/labels.jsonl   from prepare_llmrouterbench.py
   data/llmrouterbench/acts-9b/       from `opastin-encode --input sample.jsonl --out ...`
 
-Per candidate model ("head") the probe predicts
-  p_success = sigmoid(w·h + b)     logistic regression, label = score >= 0.5
-  cost      = exp(w·h + b)         ridge regression on log(cost USD)
-from the encoder's hidden state h at one layer. Each head is fit as
-standardize -> PCA(100) -> linear model, then collapsed into a single weight vector over h
-(all steps are linear), which is what the Rust ProbeRouter loads.
+The probe predicts per capability tier (small / medium / large / xlarge), not per named
+model, so deployments map their own models onto tiers:
+  p_success  = sigmoid(w·h + b)     chance a model of the tier answers successfully
+  out_tokens = exp(w·h + b) − 1     expected output tokens
+from the encoder's hidden state h at one layer. The router turns tokens into dollars
+with each model's own prices.
+
+Tiers from the benchmark: the 13 models are ranked by overall success on all
+LLMRouterBench prompts and split into thirds (small / medium / large). A tier's label on
+a prompt is the fraction of its models that answered it (fit by weighted logistic
+regression); its token target is their mean output tokens. No benchmark model is in the
+"xlarge" (Fable) class, so that head is extrapolated one step beyond large:
+xlarge = large + (large − medium) in log-odds, with large's token head.
+
+Each head is standardize -> PCA(100) -> logistic / ridge, collapsed into one weight vector
+over h (every step is linear), which is what the Rust ProbeRouter loads.
 
 Steps:
   1. Split prompts 80/20, stratified by dataset (seeded).
-  2. On the 80%: 5-fold CV over (layer, pooling) and regularization; compare against
-     baselines (prompt length, TF-IDF, dataset identity).
-  3. On the 20%: route with argmax p - lambda*cost and compare with random routing at
-     equal cost, single models, and the oracle.
-  4. Refit the chosen configuration on all prompts and export the probe JSON.
+  2. On the 80%: 5-fold CV over (layer, pooling) and regularization, against baselines
+     (prompt length, TF-IDF, dataset identity).
+  3. On the 20%: route between tiers with argmax p - lambda*cost; compare with random
+     routing at equal cost, single tiers, a dataset-identity router and the oracle.
+  4. Refit on all prompts, export the probe JSON and a markdown report.
 
 Usage: uv run train_probe.py [--out ../models/probes/llmrouterbench-qwen35-9b.json]
 """
@@ -30,6 +40,8 @@ import json
 from pathlib import Path
 
 import numpy as np
+from scipy import sparse
+from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, Ridge
@@ -40,160 +52,170 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "llmrouterbench"
 PCA_DIM = 100
-COST_FLOOR = 1e-6  # some recorded costs are 0
 SEED = 0
+TRAINED_TIERS = ["small", "medium", "large"]
 
 
 # --- data -----------------------------------------------------------------------------
 
 
+def assign_tiers(all_labels: list[dict]) -> dict[str, list[str]]:
+    """Rank models by overall success on every prompt and split them into thirds."""
+    models = sorted({m for r in all_labels for m in r["models"]})
+    rate = {}
+    for m in models:
+        scores = [r["models"][m]["score"] >= 0.5 for r in all_labels if m in r["models"]]
+        rate[m] = float(np.mean(scores))
+    ranked = sorted(models, key=lambda m: rate[m])
+    bands = np.array_split(np.array(ranked), len(TRAINED_TIERS))
+    return {t: list(b) for t, b in zip(TRAINED_TIERS, bands)}, rate
+
+
 def load(acts_dir: Path):
     meta = json.loads((acts_dir / "meta.json").read_text())
-    ids = meta["ids"]
-    labels = {}
-    with open(DATA / "labels.jsonl") as f:
-        for line in f:
-            it = json.loads(line)
-            labels[it["id"]] = it
-    rows = [labels[i] for i in ids]
-    models = sorted({m for r in rows for m in r["models"]})
-    n, k = len(rows), len(models)
-    success = np.full((n, k), np.nan)
-    cost = np.full((n, k), np.nan)
-    for i, r in enumerate(rows):
-        for j, m in enumerate(models):
-            if m in r["models"]:
-                success[i, j] = float(r["models"][m]["score"] >= 0.5)
-                cost[i, j] = max(r["models"][m]["cost"], 0.0)
+    all_labels = [json.loads(l) for l in open(DATA / "labels.jsonl")]
+    tiers, rate = assign_tiers(all_labels)
+    by_id = {r["id"]: r for r in all_labels}
+    rows = [by_id[i] for i in meta["ids"]]
+
+    n, T = len(rows), len(TRAINED_TIERS)
+    frac = np.zeros((n, T))       # fraction of the tier's models that succeeded
+    tokens = np.zeros((n, T))     # mean output tokens of the tier's models
+    cost = np.zeros((n, T))       # mean recorded USD cost of the tier's models
+    member_success = []           # per tier: (n, members) binary matrix, NaN if missing
+    for t, tier in enumerate(TRAINED_TIERS):
+        ms = tiers[tier]
+        succ = np.full((n, len(ms)), np.nan)
+        for i, r in enumerate(rows):
+            vals = [r["models"][m] for m in ms if m in r["models"]]
+            for k, m in enumerate(ms):
+                if m in r["models"]:
+                    succ[i, k] = float(r["models"][m]["score"] >= 0.5)
+            frac[i, t] = np.mean([v["score"] >= 0.5 for v in vals])
+            tokens[i, t] = np.mean([v["out_tokens"] for v in vals])
+            cost[i, t] = np.mean([v["cost"] for v in vals])
+        member_success.append(succ)
     datasets = np.array([r["dataset"] for r in rows])
     prompts = [r["prompt"] for r in rows]
     last = np.load(acts_dir / "last.npy", mmap_mode="r")
     mean = np.load(acts_dir / "mean.npy", mmap_mode="r")
     n_tokens = np.load(acts_dir / "n_tokens.npy")
-    return meta, models, success, cost, datasets, prompts, last, mean, n_tokens
+    return meta, tiers, rate, frac, tokens, cost, member_success, datasets, prompts, last, mean, n_tokens
 
 
 # --- models ---------------------------------------------------------------------------
 
 
-class LinearProbe:
-    """standardize -> PCA -> logistic / ridge, for one feature matrix and many heads."""
+def fit_weighted_logistic(F, frac, C):
+    """Logistic regression on fractional labels: each row appears as a success with
+    weight `frac` and as a failure with weight `1 - frac`."""
+    n = F.shape[0]
+    X = sparse.vstack([F, F]).tocsr() if sparse.issparse(F) else np.vstack([F, F])
+    y = np.concatenate([np.ones(n), np.zeros(n)])
+    w = np.concatenate([frac, 1 - frac])
+    keep = w > 0
+    return LogisticRegression(C=C, max_iter=3000).fit(X[keep], y[keep], sample_weight=w[keep])
 
-    def __init__(self, pca_dim=PCA_DIM, C=0.1, alpha=10.0):
-        self.pca_dim, self.C, self.alpha = pca_dim, C, alpha
 
-    def fit(self, X, success, cost):
-        self.scaler = StandardScaler().fit(X)
-        Z = self.scaler.transform(X)
-        self.pca = PCA(n_components=min(self.pca_dim, Z.shape[0] - 1, Z.shape[1]), random_state=SEED).fit(Z)
-        F = self.pca.transform(Z)
-        self.success_heads, self.cost_heads = [], []
-        for j in range(success.shape[1]):
-            ok = ~np.isnan(success[:, j])
-            clf = LogisticRegression(C=self.C, max_iter=2000).fit(F[ok], success[ok, j])
-            reg = Ridge(alpha=self.alpha).fit(F[ok], np.log(cost[ok, j] + COST_FLOOR))
-            self.success_heads.append(clf)
-            self.cost_heads.append(reg)
-        return self
+class TierProbe:
+    """standardize -> PCA -> per-tier logistic (success) and ridge (log tokens)."""
+
+    def __init__(self, pca_dim=PCA_DIM, C=0.1, alpha=10.0, sparse=False):
+        self.pca_dim, self.C, self.alpha, self.sparse = pca_dim, C, alpha, sparse
 
     def features(self, X):
+        if self.sparse:
+            return X
         return self.pca.transform(self.scaler.transform(X))
+
+    def fit(self, X, frac, tokens):
+        if not self.sparse:
+            self.scaler = StandardScaler().fit(X)
+            Z = self.scaler.transform(X)
+            k = min(self.pca_dim, Z.shape[0] - 1, Z.shape[1])
+            self.pca = PCA(n_components=k, random_state=SEED).fit(Z)
+        F = self.features(X)
+        self.succ = [fit_weighted_logistic(F, frac[:, t], self.C) for t in range(frac.shape[1])]
+        self.tok = [Ridge(alpha=self.alpha).fit(F, np.log1p(tokens[:, t])) for t in range(frac.shape[1])]
+        return self
 
     def predict(self, X):
         F = self.features(X)
-        p = np.column_stack([h.predict_proba(F)[:, 1] for h in self.success_heads])
-        c = np.column_stack([np.exp(h.predict(F)) for h in self.cost_heads])
-        return p, c
+        p = np.column_stack([h.predict_proba(F)[:, 1] for h in self.succ])
+        k = np.column_stack([np.expm1(h.predict(F)) for h in self.tok])
+        return p, np.maximum(k, 0)
 
-    def collapse(self, j):
-        """Head j as weight vectors over the raw features: logit = h·w + b."""
+    def collapse(self, model):
+        """A fitted linear model on PCA features as (w, b) over the raw features."""
         mu, sd = self.scaler.mean_, self.scaler.scale_
         P, pm = self.pca.components_, self.pca.mean_
-
-        def lin(coef, intercept):
-            v = P.T @ coef
-            return v / sd, float(intercept - (mu / sd + pm) @ v)
-
-        sw, sb = lin(self.success_heads[j].coef_[0], self.success_heads[j].intercept_[0])
-        cw, cb = lin(self.cost_heads[j].coef_, self.cost_heads[j].intercept_)
-        return (sw, sb), (cw, cb)
+        coef = np.ravel(model.coef_)
+        intercept = float(np.ravel([model.intercept_])[0])
+        v = P.T @ coef
+        return v / sd, intercept - float((mu / sd + pm) @ v)
 
 
-def auroc_columns(y, p):
-    """Mean AUROC over heads (columns), skipping heads with one class."""
-    out = []
-    for j in range(y.shape[1]):
-        ok = ~np.isnan(y[:, j])
-        if len(np.unique(y[ok, j])) == 2:
-            out.append(roc_auc_score(y[ok, j], p[ok, j]))
-    return float(np.mean(out))
+# --- metrics --------------------------------------------------------------------------
 
 
-def within_dataset_auroc(y, p, datasets):
-    """AUROC computed inside each dataset, averaged (weighted by size): how well the
-    probe ranks difficulty beyond knowing which benchmark a prompt is from."""
+def member_auroc(p, member_success, datasets=None):
+    """AUROC of the tier prediction against each member model's success, averaged over
+    tiers. With `datasets`, computed inside each benchmark and averaged by size (how well
+    difficulty is ranked beyond knowing which benchmark a prompt is from)."""
+    groups = [np.ones(len(p), bool)] if datasets is None else [datasets == d for d in np.unique(datasets)]
     total, weight = 0.0, 0
-    for ds in np.unique(datasets):
-        m = datasets == ds
+    for g in groups:
         vals = []
-        for j in range(y.shape[1]):
-            ok = m & ~np.isnan(y[:, j])
-            if len(np.unique(y[ok, j])) == 2:
-                vals.append(roc_auc_score(y[ok, j], p[ok, j]))
+        for t, succ in enumerate(member_success):
+            y = succ[g].ravel()
+            s = np.repeat(p[g, t], succ.shape[1])
+            ok = ~np.isnan(y)
+            if len(np.unique(y[ok])) == 2:
+                vals.append(roc_auc_score(y[ok], s[ok]))
         if vals:
-            total += np.mean(vals) * m.sum()
-            weight += m.sum()
-    return total / weight
+            total += np.mean(vals) * g.sum()
+            weight += g.sum()
+    return float(total / weight)
 
 
-def spearman_cost(c_true, c_pred):
-    from scipy.stats import spearmanr
-
-    vals = []
-    for j in range(c_true.shape[1]):
-        ok = ~np.isnan(c_true[:, j])
-        vals.append(spearmanr(c_true[ok, j], c_pred[ok, j]).statistic)
-    return float(np.mean(vals))
+def token_spearman(true, pred):
+    return float(np.mean([spearmanr(true[:, t], pred[:, t]).statistic for t in range(true.shape[1])]))
 
 
-# --- evaluation -----------------------------------------------------------------------
-
-
-def cv_score(make_X, idx, success, cost, datasets, C, alpha, folds=5):
-    """5-fold CV on rows `idx`; returns mean AUROC, within-dataset AUROC, cost Spearman."""
-    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=SEED)
-    P = np.zeros((len(idx), success.shape[1]))
-    Cp = np.zeros_like(P)
+def cv_score(fx, idx, frac, tokens, member_success, datasets, C=0.1, alpha=10.0, sparse=False, pca_dim=PCA_DIM):
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+    P = np.zeros((len(idx), frac.shape[1]))
+    K = np.zeros_like(P)
     for tr, va in skf.split(idx, datasets[idx]):
-        Xtr, Xva = make_X(idx[tr]), make_X(idx[va])
-        probe = LinearProbe(C=C, alpha=alpha).fit(Xtr, success[idx[tr]], cost[idx[tr]])
-        P[va], Cp[va] = probe.predict(Xva)
-    y, c = success[idx], cost[idx]
-    return auroc_columns(y, P), within_dataset_auroc(y, P, datasets[idx]), spearman_cost(c, Cp)
+        probe = TierProbe(pca_dim=pca_dim, C=C, alpha=alpha, sparse=sparse)
+        probe.fit(fx(idx[tr]), frac[idx[tr]], tokens[idx[tr]])
+        P[va], K[va] = probe.predict(fx(idx[va]))
+    ms = [s[idx] for s in member_success]
+    return (member_auroc(P, ms), member_auroc(P, ms, datasets[idx]), token_spearman(tokens[idx], K))
 
 
-def route_eval(p, c, success, cost, cand, lambdas):
-    """Route among candidate columns `cand`; return list of (lambda, success, cost, share)."""
+# --- routing evaluation ---------------------------------------------------------------
+
+
+def routing_eval(p, k_pred, frac, cost, price_per_token, lambdas):
+    """Route each prompt to the tier with the best p - lambda * predicted cost. Outcomes
+    are the chosen tier's mean success and mean recorded cost on that prompt."""
+    rows = np.arange(len(p))
     out = []
     for lam in lambdas:
-        score = p[:, cand] - lam * c[:, cand]
-        pick = np.array(cand)[np.argmax(score, axis=1)]
-        rows = np.arange(len(pick))
-        s, k = success[rows, pick], cost[rows, pick]
-        ok = ~np.isnan(s)
-        share = {m: float(np.mean(pick == m)) for m in cand}
-        out.append((lam, float(np.mean(s[ok])), float(np.mean(k[ok])), share))
+        score = p - lam * (k_pred * price_per_token[None, :])
+        pick = np.argmax(score, axis=1)
+        out.append((lam, float(frac[rows, pick].mean()), float(cost[rows, pick].mean()),
+                    np.bincount(pick, minlength=p.shape[1]) / len(pick)))
     return out
 
 
-def random_at_cost(success, cost, cand, target_cost):
-    """Expected success of random routing between the cheapest and priciest candidate
-    with the mix that matches target_cost (the random baseline at equal cost)."""
-    mean_c = {j: np.nanmean(cost[:, j]) for j in cand}
-    mean_s = {j: np.nanmean(success[:, j]) for j in cand}
-    lo, hi = min(cand, key=lambda j: mean_c[j]), max(cand, key=lambda j: mean_c[j])
-    q = np.clip((target_cost - mean_c[lo]) / (mean_c[hi] - mean_c[lo]), 0, 1)
-    return float(q * mean_s[hi] + (1 - q) * mean_s[lo])
+def random_at_cost(frac, cost, target):
+    """Random routing between the cheapest and priciest tier mixed to match `target` cost."""
+    c, s = cost.mean(0), frac.mean(0)
+    lo, hi = int(np.argmin(c)), int(np.argmax(c))
+    q = np.clip((target - c[lo]) / (c[hi] - c[lo]), 0, 1)
+    return float(q * s[hi] + (1 - q) * s[lo])
 
 
 # --- main -----------------------------------------------------------------------------
@@ -207,235 +229,194 @@ def main():
     ap.add_argument("--layer-step", type=int, default=2, help="sweep every Nth captured layer")
     args = ap.parse_args()
 
-    meta, models, success, cost, datasets, prompts, last, mean, n_tokens = load(args.acts)
+    (meta, tiers, rate, frac, tokens, cost, member_success, datasets, prompts,
+     last, mean, n_tokens) = load(args.acts)
     layers = meta["layers"]
     n = len(datasets)
-    print(f"{n} prompts, {len(models)} models, {len(layers)} captured layers, hidden {last.shape[2]}")
+    print(f"{n} prompts, {len(layers)} captured layers, hidden {last.shape[2]}")
+    for t in TRAINED_TIERS:
+        print(f"tier {t:<6}: " + ", ".join(f"{m} ({rate[m]:.3f})" for m in tiers[t]))
 
     idx_train, idx_test = train_test_split(np.arange(n), test_size=0.2, random_state=SEED, stratify=datasets)
     idx_train.sort()
     idx_test.sort()
 
-    results = {}
+    # Effective USD per output token per tier (recorded cost / output tokens, training
+    # split): turns predicted tokens into the cost estimate used for routing evaluation.
+    price_per_token = cost[idx_train].sum(0) / np.maximum(tokens[idx_train].sum(0), 1)
 
     # Baselines.
     ohe = OneHotEncoder().fit(datasets.reshape(-1, 1))
-    tfidf = TfidfVectorizer(max_features=50000, ngram_range=(1, 2), sublinear_tf=True).fit([prompts[i] for i in idx_train])
+    tfidf = TfidfVectorizer(max_features=50000, ngram_range=(1, 2), sublinear_tf=True).fit(
+        [prompts[i] for i in idx_train])
     baselines = {
-        "length (log tokens)": lambda ix: np.log(n_tokens[ix]).reshape(-1, 1).astype(float),
-        "dataset identity": lambda ix: ohe.transform(datasets[ix].reshape(-1, 1)).toarray(),
-        "TF-IDF": lambda ix: tfidf.transform([prompts[i] for i in ix]),
+        "length (log tokens)": (lambda ix: np.log(n_tokens[ix]).reshape(-1, 1).astype(float), False),
+        "dataset identity": (lambda ix: ohe.transform(datasets[ix].reshape(-1, 1)).toarray(), False),
+        "TF-IDF": (lambda ix: tfidf.transform([prompts[i] for i in ix]), True),
     }
-    for name, fx in baselines.items():
-        results[name] = cv_score_baseline(fx, idx_train, success, cost, datasets, sparse=(name == "TF-IDF"))
-        print(f"baseline {name:<22} AUROC {results[name][0]:.3f}  within-dataset {results[name][1]:.3f}  cost rho {results[name][2]:.3f}")
+    results = {}
+    for name, (fx, sparse) in baselines.items():
+        results[name] = cv_score(fx, idx_train, frac, tokens, member_success, datasets,
+                                 C=1.0, alpha=1.0, sparse=sparse, pca_dim=10**6)
+        print(f"baseline {name:<20} AUROC {results[name][0]:.3f}  within-dataset {results[name][1]:.3f}  tokens rho {results[name][2]:.3f}", flush=True)
 
-    # Activation sweep: every Nth layer, both poolings, then refine C around the best.
+    # Activation sweep.
     sweep = []
     for k in range(0, len(layers), args.layer_step):
         for pool, arr in (("last", last), ("mean", mean)):
             fx = lambda ix, arr=arr, k=k: np.asarray(arr[ix, k, :], dtype=np.float32)
-            r = cv_score(fx, idx_train, success, cost, datasets, C=0.1, alpha=10.0)
+            r = cv_score(fx, idx_train, frac, tokens, member_success, datasets)
             sweep.append((layers[k], pool, *r))
-            print(f"layer {layers[k]:>2} {pool:<4}  AUROC {r[0]:.3f}  within-dataset {r[1]:.3f}  cost rho {r[2]:.3f}", flush=True)
-    best = max(sweep, key=lambda t: t[3])  # by within-dataset AUROC: difficulty, not benchmark identity
-    best_layer, best_pool = best[0], best[1]
+            print(f"layer {layers[k]:>2} {pool:<4} AUROC {r[0]:.3f}  within-dataset {r[1]:.3f}  tokens rho {r[2]:.3f}", flush=True)
+    # Choose by within-dataset AUROC: difficulty, not benchmark identity.
+    best_layer, best_pool = max(sweep, key=lambda t: t[3])[:2]
     k_best = layers.index(best_layer)
     arr_best = last if best_pool == "last" else mean
     fx_best = lambda ix: np.asarray(arr_best[ix, k_best, :], dtype=np.float32)
     grid = []
     for C in (0.01, 0.03, 0.1, 0.3, 1.0):
-        r = cv_score(fx_best, idx_train, success, cost, datasets, C=C, alpha=10.0)
+        r = cv_score(fx_best, idx_train, frac, tokens, member_success, datasets, C=C)
         grid.append((C, *r))
         print(f"C={C:<5} AUROC {r[0]:.3f}  within-dataset {r[1]:.3f}", flush=True)
     best_C = max(grid, key=lambda t: t[2])[0]
-    alpha_grid = []
-    for alpha in (1.0, 10.0, 100.0, 1000.0):
-        r = cv_score(fx_best, idx_train, success, cost, datasets, C=best_C, alpha=alpha)
-        alpha_grid.append((alpha, r[2]))
+    alpha_grid = [(a, cv_score(fx_best, idx_train, frac, tokens, member_success, datasets, C=best_C, alpha=a)[2])
+                  for a in (1.0, 10.0, 100.0, 1000.0)]
     best_alpha = max(alpha_grid, key=lambda t: t[1])[0]
     print(f"chosen: layer {best_layer} {best_pool}, C={best_C}, alpha={best_alpha}")
 
-    # Held-out test: fit on train, evaluate on test.
-    probe = LinearProbe(C=best_C, alpha=best_alpha).fit(fx_best(idx_train), success[idx_train], cost[idx_train])
-    p_te, c_te = probe.predict(fx_best(idx_test))
-    y_te, k_te, d_te = success[idx_test], cost[idx_test], datasets[idx_test]
-    test_metrics = {
-        "auroc": auroc_columns(y_te, p_te),
-        "within_dataset_auroc": float(within_dataset_auroc(y_te, p_te, d_te)),
-        "cost_spearman": spearman_cost(k_te, c_te),
+    # Held-out test.
+    probe = TierProbe(C=best_C, alpha=best_alpha).fit(fx_best(idx_train), frac[idx_train], tokens[idx_train])
+    p_te, k_te = probe.predict(fx_best(idx_test))
+    ms_te = [s[idx_test] for s in member_success]
+    test = {
+        "auroc": member_auroc(p_te, ms_te),
+        "within_dataset_auroc": member_auroc(p_te, ms_te, datasets[idx_test]),
+        "tokens_spearman": token_spearman(tokens[idx_test], k_te),
     }
-    # Dataset-identity router on the same split, for comparison.
-    ds_probe = LinearProbe(pca_dim=10**6, C=1.0, alpha=1.0)
+    print("test:", {k: round(v, 3) for k, v in test.items()})
+
+    ds_probe = TierProbe(pca_dim=10**6, C=1.0, alpha=1.0)
     Xd = ohe.transform(datasets.reshape(-1, 1)).toarray()
-    ds_probe.fit(Xd[idx_train], success[idx_train], cost[idx_train])
-    p_ds, c_ds = ds_probe.predict(Xd[idx_test])
-    print("test:", {k: round(float(v), 3) for k, v in test_metrics.items()})
+    ds_probe.fit(Xd[idx_train], frac[idx_train], tokens[idx_train])
+    p_ds, k_ds = ds_probe.predict(Xd[idx_test])
 
-    routing = routing_report(models, p_te, c_te, p_ds, c_ds, y_te, k_te)
+    lambdas = [0, 1, 3, 10, 30, 100, 300, 1000]
+    f_te, c_te = frac[idx_test], cost[idx_test]
+    probe_curve = routing_eval(p_te, k_te, f_te, c_te, price_per_token, lambdas)
+    ds_curve = routing_eval(p_ds, k_ds, f_te, c_te, price_per_token, lambdas)
+    singles = {t: (float(f_te[:, i].mean()), float(c_te[:, i].mean())) for i, t in enumerate(TRAINED_TIERS)}
+    # Oracle: per prompt, the tier with the highest success, cheapest among ties.
+    oracle_pick = np.array(
+        [min(range(f_te.shape[1]), key=lambda t: (-f_te[i, t], c_te[i, t])) for i in range(len(f_te))])
+    rows = np.arange(len(f_te))
+    oracle = (float(f_te[rows, oracle_pick].mean()), float(c_te[rows, oracle_pick].mean()))
+    routing = []
+    print("\nrouting between tiers on the held-out split:")
+    for t, (s, c) in singles.items():
+        print(f"  always {t:<6} success {s:.3f}  cost ${c:.5f}")
+    for (lam, s, c, share), (_, s_ds, c_ds, _) in zip(probe_curve, ds_curve):
+        affordable = [v[0] for v in singles.values() if v[1] <= c * 1.0001]
+        row = {"lambda": lam, "success": s, "cost": c, "share": dict(zip(TRAINED_TIERS, map(float, share))),
+               "random_same_cost": random_at_cost(f_te, c_te, c),
+               "best_single_within_cost": max(affordable) if affordable else None,
+               "dataset_router": (s_ds, c_ds)}
+        routing.append(row)
+        print(f"  lambda {lam:>5}: success {s:.3f} cost ${c:.5f} | random at same cost {row['random_same_cost']:.3f}"
+              f" | dataset router {s_ds:.3f} @ ${c_ds:.5f} | share {np.round(share, 2)}")
+    print(f"  oracle: success {oracle[0]:.3f} cost ${oracle[1]:.5f}")
 
-    # Final probe on all prompts.
-    final = LinearProbe(C=best_C, alpha=best_alpha).fit(fx_best(np.arange(n)), success, cost)
+    # Final probe on all prompts, collapsed to weights over h.
+    final = TierProbe(C=best_C, alpha=best_alpha).fit(fx_best(np.arange(n)), frac, tokens)
     heads = {}
-    Xcheck = fx_best(idx_test[:50])
-    p_chk, c_chk = final.predict(Xcheck)
-    for j, m in enumerate(models):
-        (sw, sb), (cw, cb) = final.collapse(j)
-        # The collapsed linear map must reproduce the pipeline exactly.
-        p_lin = 1 / (1 + np.exp(-(Xcheck.astype(np.float64) @ sw + sb)))
-        c_lin = np.exp(Xcheck.astype(np.float64) @ cw + cb)
-        assert np.allclose(p_lin, p_chk[:, j], atol=1e-4), m
-        assert np.allclose(c_lin, c_chk[:, j], rtol=1e-3), m
-        heads[m] = {
-            "success": {"w": [float(x) for x in sw.astype(np.float32)], "b": sb},
-            "log_cost": {"w": [float(x) for x in cw.astype(np.float32)], "b": cb},
-        }
+    check_X = fx_best(idx_test[:50]).astype(np.float64)
+    p_chk, k_chk = final.predict(check_X.astype(np.float32))
+    for t, tier in enumerate(TRAINED_TIERS):
+        sw, sb = final.collapse(final.succ[t])
+        tw, tb = final.collapse(final.tok[t])
+        assert np.allclose(1 / (1 + np.exp(-(check_X @ sw + sb))), p_chk[:, t], atol=1e-4), tier
+        assert np.allclose(np.maximum(np.expm1(check_X @ tw + tb), 0), k_chk[:, t], rtol=1e-3, atol=1e-3), tier
+        heads[tier] = {"success": (sw, sb), "log_out_tokens": (tw, tb), "extrapolated": False}
+    # xlarge: one step beyond large in log-odds; large's token head.
+    (lw, lb), (mw, mb) = heads["large"]["success"], heads["medium"]["success"]
+    heads["xlarge"] = {"success": (2 * lw - mw, 2 * lb - mb),
+                       "log_out_tokens": heads["large"]["log_out_tokens"], "extrapolated": True}
+
+    def lin(wb):
+        w, b = wb
+        return {"w": [float(x) for x in np.asarray(w, dtype=np.float32)], "b": float(b)}
 
     probe_file = {
-        "format": "opastin-probe/1",
+        "format": "opastin-probe/2",
         "encoder": {
-            "layer": int(best_layer),
-            "pooling": best_pool,
-            "thinking": bool(meta["thinking"]),
-            "max_tokens": int(meta["max_tokens"]),
-            "n_embd": int(last.shape[2]),
+            "layer": int(best_layer), "pooling": best_pool, "thinking": bool(meta["thinking"]),
+            "max_tokens": int(meta["max_tokens"]), "n_embd": int(last.shape[2]),
             "model": Path(meta["model"]).name,
         },
-        "heads": heads,
+        "heads": {t: {"success": lin(h["success"]), "log_out_tokens": lin(h["log_out_tokens"]),
+                      "extrapolated": h["extrapolated"]} for t, h in heads.items()},
         "metadata": {
             "trained": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "dataset": "LLMRouterBench performance-cost setting (https://huggingface.co/datasets/NPULH/LLMRouterBench)",
             "n_prompts": n,
-            "label": "success = score >= 0.5; cost = recorded USD per answer",
-            "pipeline": f"standardize -> PCA({PCA_DIM}) -> logistic(C={best_C}) / ridge(alpha={best_alpha}) on log cost, collapsed",
-            "heldout_test": test_metrics,
+            "tiers": tiers,
+            "label": "tier success = fraction of the tier's models with score >= 0.5; tokens = their mean output tokens",
+            "xlarge": "extrapolated: large + (large - medium) in log-odds; large's token head",
+            "pipeline": f"standardize -> PCA({PCA_DIM}) -> weighted logistic(C={best_C}) / ridge(alpha={best_alpha}) on log1p(tokens), collapsed",
+            "heldout_test": test,
         },
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(probe_file))
     print(f"wrote {args.out} ({args.out.stat().st_size / 1e6:.1f} MB)")
 
-    write_report(args.report, meta, models, n, idx_train, idx_test, results, sweep, grid,
-                 best_layer, best_pool, best_C, best_alpha, test_metrics, routing, args.out)
+    write_report(args.report, meta, tiers, rate, n, idx_train, idx_test, results, sweep, grid,
+                 best_layer, best_pool, best_C, best_alpha, test, singles, routing, oracle,
+                 price_per_token, args.out)
 
 
-class SparseLinear:
-    """Logistic / ridge directly on sparse features (TF-IDF baseline)."""
-
-    def fit(self, X, success, cost):
-        self.s, self.c = [], []
-        for j in range(success.shape[1]):
-            ok = ~np.isnan(success[:, j])
-            self.s.append(LogisticRegression(C=1.0, max_iter=2000).fit(X[ok], success[ok, j]))
-            self.c.append(Ridge(alpha=1.0).fit(X[ok], np.log(cost[ok, j] + COST_FLOOR)))
-        return self
-
-    def predict(self, X):
-        p = np.column_stack([h.predict_proba(X)[:, 1] for h in self.s])
-        c = np.column_stack([np.exp(h.predict(X)) for h in self.c])
-        return p, c
-
-
-def cv_score_baseline(fx, idx, success, cost, datasets, sparse=False):
-    """CV for baseline feature sets (small dense features without PCA, or sparse)."""
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-    P = np.zeros((len(idx), success.shape[1]))
-    Cp = np.zeros_like(P)
-    for tr, va in skf.split(idx, datasets[idx]):
-        probe = SparseLinear() if sparse else LinearProbe(pca_dim=10**6, C=1.0, alpha=1.0)
-        probe.fit(fx(idx[tr]), success[idx[tr]], cost[idx[tr]])
-        P[va], Cp[va] = probe.predict(fx(idx[va]))
-    y, c = success[idx], cost[idx]
-    return auroc_columns(y, P), within_dataset_auroc(y, P, datasets[idx]), spearman_cost(c, Cp)
-
-
-def routing_report(models, p, c, p_ds, c_ds, y, k):
-    j = {m: i for i, m in enumerate(models)}
-    pairs = {
-        "gpt-5 vs qwen3-235b-a22b-2507": [j["gpt-5"], j["qwen3-235b-a22b-2507"]],
-        "gemini-2.5-pro vs deepseek-v3-0324": [j["gemini-2.5-pro"], j["deepseek-v3-0324"]],
-        "all 13 models": list(range(len(models))),
-    }
-    lambdas = [0.0, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0]
-    report = {}
-    for name, cand in pairs.items():
-        probe_curve = route_eval(p, c, y, k, cand, lambdas)
-        ds_curve = route_eval(p_ds, c_ds, y, k, cand, lambdas)
-        singles = {models[i]: (float(np.nanmean(y[:, i])), float(np.nanmean(k[:, i]))) for i in cand}
-        # Oracle: the cheapest candidate that succeeds (or the cheapest overall if none does).
-        oracle_s, oracle_c = [], []
-        for r in range(len(y)):
-            ok = [i for i in cand if y[r, i] == 1]
-            pool = ok or [i for i in cand if not np.isnan(k[r, i])]
-            best = min(pool, key=lambda i: k[r, i])
-            oracle_s.append(1.0 if ok else 0.0)
-            oracle_c.append(k[r, best])
-        rows = []
-        for (lam, s, cst, share), (_, s_ds, c_ds_, _) in zip(probe_curve, ds_curve):
-            affordable = [v[0] for v in singles.values() if v[1] <= cst * 1.0001]
-            rows.append({
-                "lambda": lam, "success": s, "cost": cst,
-                "random_same_cost": random_at_cost(y, k, cand, cst),
-                "best_single_within_cost": max(affordable) if affordable else None,
-                "dataset_router_success": s_ds, "dataset_router_cost": c_ds_,
-                "share": {models[i]: v for i, v in share.items()},
-            })
-        report[name] = {
-            "rows": rows, "singles": singles,
-            "oracle": (float(np.mean(oracle_s)), float(np.mean(oracle_c))),
-        }
-        print(f"\nrouting: {name}")
-        for m, (s, cst) in singles.items():
-            print(f"  always {m:<30} success {s:.3f}  cost ${cst:.5f}")
-        for row in rows:
-            print(f"  lambda {row['lambda']:>5}: success {row['success']:.3f}  cost ${row['cost']:.5f}"
-                  f"  | random at same cost {row['random_same_cost']:.3f}"
-                  f"  | best single <= cost {row['best_single_within_cost'] if row['best_single_within_cost'] is None else round(row['best_single_within_cost'], 3)}"
-                  f"  | dataset-router {row['dataset_router_success']:.3f} @ ${row['dataset_router_cost']:.5f}")
-        print(f"  oracle: success {report[name]['oracle'][0]:.3f}  cost ${report[name]['oracle'][1]:.5f}")
-    return report
-
-
-def write_report(path, meta, models, n, idx_train, idx_test, baselines, sweep, grid,
-                 best_layer, best_pool, best_C, best_alpha, test, routing, out):
-    L = []
-    L.append("# Probe results: LLMRouterBench, Qwen3.5-9B activations\n")
-    L.append(f"Generated by `training/train_probe.py` on {dt.date.today().isoformat()}. "
-             f"{n} prompts ({len(idx_train)} train / {len(idx_test)} held-out test, stratified by dataset), "
-             f"{len(models)} target models, encoder `{Path(meta['model']).name}`, prompts truncated to "
-             f"{meta['max_tokens']} tokens, thinking={meta['thinking']}.\n")
-    L.append("**Label:** success = benchmark score ≥ 0.5 (ArenaHard ties count as success); cost = recorded USD per answer.\n")
-    L.append("**Metrics:** *AUROC* averages each model's success AUROC. *Within-dataset AUROC* computes it inside each "
-             "benchmark and averages: how well difficulty is ranked beyond knowing the benchmark. *Cost ρ* is the "
-             "Spearman correlation of predicted and actual cost.\n")
+def write_report(path, meta, tiers, rate, n, idx_train, idx_test, baselines, sweep, grid,
+                 best_layer, best_pool, best_C, best_alpha, test, singles, routing, oracle, ppt, out):
+    L = ["# Probe results: LLMRouterBench, Qwen3.5-9B activations\n"]
+    L.append(f"Generated by `training/train_probe.py` on {dt.date.today().isoformat()}: {n} prompts "
+             f"({len(idx_train)} train / {len(idx_test)} held-out test, stratified by dataset), encoder "
+             f"`{Path(meta['model']).name}`, prompts truncated to {meta['max_tokens']} tokens, thinking={meta['thinking']}.\n")
+    L.append("## Tiers\n")
+    L.append("The 13 benchmark models are ranked by overall success on all 12,446 LLMRouterBench prompts and split into thirds. "
+             "A tier's label on a prompt is the fraction of its models that answered it (score ≥ 0.5); its token target is their mean output tokens.\n")
+    L.append("| Tier | Models (overall success) |\n|---|---|")
+    for t in TRAINED_TIERS:
+        L.append(f"| {t} | " + ", ".join(f"{m} ({rate[m]:.2f})" for m in tiers[t]) + " |")
+    L.append("| xlarge | none; head extrapolated as large + (large − medium) in log-odds |\n")
+    L.append("**Metrics.** *AUROC*: tier prediction against each member model's success, averaged over tiers. "
+             "*Within-dataset AUROC*: the same inside each benchmark, averaged; how well difficulty is ranked beyond knowing the benchmark. "
+             "*Tokens ρ*: Spearman correlation of predicted and actual mean output tokens.\n")
     L.append("## Cross-validation on the training split (5 folds)\n")
-    L.append("| Features | AUROC | Within-dataset AUROC | Cost ρ |\n|---|---|---|---|")
+    L.append("| Features | AUROC | Within-dataset AUROC | Tokens ρ |\n|---|---|---|---|")
     for name, (a, w, r) in baselines.items():
         L.append(f"| baseline: {name} | {a:.3f} | {w:.3f} | {r:.3f} |")
     for layer, pool, a, w, r in sweep:
         mark = " **(chosen)**" if (layer, pool) == (best_layer, best_pool) else ""
-        L.append(f"| layer {layer}, {pool} token{'s' if pool == 'mean' else ''}{mark} | {a:.3f} | {w:.3f} | {r:.3f} |")
+        L.append(f"| layer {layer}, {'last token' if pool == 'last' else 'mean of tokens'}{mark} | {a:.3f} | {w:.3f} | {r:.3f} |")
     L.append(f"\nRegularization: C ∈ {[g[0] for g in grid]} → C = {best_C}; ridge α = {best_alpha}.\n")
     L.append("## Held-out test split\n")
-    L.append(f"AUROC {test['auroc']:.3f}, within-dataset AUROC {test['within_dataset_auroc']:.3f}, "
-             f"cost ρ {test['cost_spearman']:.3f}.\n")
-    for name, rep in routing.items():
-        L.append(f"### Routing: {name}\n")
-        L.append("| Router | Success | Mean cost / request |\n|---|---|---|")
-        for m, (s, c) in rep["singles"].items():
-            L.append(f"| always {m} | {s:.3f} | ${c:.5f} |")
-        for row in rep["rows"]:
-            L.append(f"| probe, λ={row['lambda']:g} | {row['success']:.3f} | ${row['cost']:.5f} |")
-        L.append(f"| oracle (cheapest model that succeeds) | {rep['oracle'][0]:.3f} | ${rep['oracle'][1]:.5f} |")
-        L.append("\n| λ | Probe success @ cost | Random routing at the same cost | Best single model at ≤ that cost | Dataset-identity router (success @ cost) |\n|---|---|---|---|---|")
-        for row in rep["rows"]:
-            bs = row["best_single_within_cost"]
-            L.append(f"| {row['lambda']:g} | {row['success']:.3f} @ ${row['cost']:.5f} | {row['random_same_cost']:.3f} | "
-                     f"{'—' if bs is None else f'{bs:.3f}'} | "
-                     f"{row['dataset_router_success']:.3f} @ ${row['dataset_router_cost']:.5f} |")
-        L.append("")
+    L.append(f"AUROC {test['auroc']:.3f}, within-dataset AUROC {test['within_dataset_auroc']:.3f}, tokens ρ {test['tokens_spearman']:.3f}.\n")
+    L.append("### Routing between small / medium / large\n")
+    L.append("Each prompt goes to the tier with the best `p − λ·cost`, where cost = predicted output tokens × the tier's effective "
+             f"USD per output token on the training split ({', '.join(f'{t}: ${v * 1e6:.2f}/M' for t, v in zip(TRAINED_TIERS, ppt))}). "
+             "The outcome is the chosen tier's mean success and mean recorded cost on that prompt.\n")
+    L.append("| Router | Success | Mean cost / request |\n|---|---|---|")
+    for t, (s, c) in singles.items():
+        L.append(f"| always {t} | {s:.3f} | ${c:.5f} |")
+    L.append(f"| oracle (best tier per prompt, cheapest among ties) | {oracle[0]:.3f} | ${oracle[1]:.5f} |\n")
+    L.append("| λ | Probe: success @ cost | Tier share (S/M/L) | Random routing at the same cost | Best single tier at ≤ that cost | Dataset-identity router |\n|---|---|---|---|---|---|")
+    for r in routing:
+        bs = r["best_single_within_cost"]
+        share = "/".join(f"{r['share'][t]:.2f}" for t in TRAINED_TIERS)
+        L.append(f"| {r['lambda']:g} | {r['success']:.3f} @ ${r['cost']:.5f} | {share} | {r['random_same_cost']:.3f} | "
+                 f"{'—' if bs is None else f'{bs:.3f}'} | {r['dataset_router'][0]:.3f} @ ${r['dataset_router'][1]:.5f} |")
     shown = out.relative_to(ROOT) if out.is_relative_to(ROOT) else out
-    L.append(f"The exported probe (`{shown}`, git-ignored) is refit on all {n} prompts.\n")
+    L.append(f"\nThe exported probe (`{shown}`, git-ignored) is refit on all {n} prompts. The xlarge head is not evaluated: "
+             "the benchmark has no model of that class.\n")
     path.write_text("\n".join(L))
     print(f"wrote {path}")
 

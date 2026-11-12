@@ -8,6 +8,10 @@ dependencies = [
     "scikit-learn==1.9.1",
 ]
 
+[dependency-groups]
+# Python MLX reference extractor (training/reference/), Apple Silicon only.
+reference = ["mlx-lm==0.32.2"]
+
 [tool.uv]
 package = false
 # Prefer uv-managed Python (a stray x86_64 Python can make uv resolve for the wrong arch).
