@@ -44,14 +44,14 @@ Health check: `curl localhost:8080/healthz`.
 
 ## Run the probe router
 
-Put the encoder model and the probe in a directory, mount it, and point the config at
-it:
+The trained predictor ships in the image at `/opt/opas/probes/`. Mount the encoder
+model and point the config at both:
 
 ```toml
 [router]
 kind = "probe"
 encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
-probe = "/models/probes/llmrouterbench-qwen35-9b.json"
+probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"   # shipped in the image
 weights = { quality = 60, speed = 20, cost = 20 }
 ```
 

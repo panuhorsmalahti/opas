@@ -62,15 +62,13 @@ models:
   download:
     - url: https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf
       path: gguf/Qwen3.5-9B-Q8_0.gguf
-    - url: https://YOUR-STORAGE/llmrouterbench-qwen35-9b.json   # the probe you trained
-      path: probes/llmrouterbench-qwen35-9b.json
 config: |
   router_model = "auto"
 
   [router]
   kind = "probe"
   encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
-  probe = "/models/probes/llmrouterbench-qwen35-9b.json"
+  probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"   # shipped in the image
   weights = { quality = 60, speed = 20, cost = 20 }
 
   [[models]]

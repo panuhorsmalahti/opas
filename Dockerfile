@@ -57,6 +57,8 @@ RUN apt-get update \
     && useradd --system --uid 10001 --home /nonexistent --shell /usr/sbin/nologin opas
 COPY --from=build /usr/local/bin/opas /usr/local/bin/opas-encode /usr/local/bin/
 COPY opas.example.toml /etc/opas/opas.toml
+# The trained predictor (small) ships in the image; the encoder model is mounted.
+COPY probes /opt/opas/probes
 
 USER opas
 # 0.0.0.0 inside the container is required for port publishing; keep the host side local

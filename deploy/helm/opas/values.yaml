@@ -46,7 +46,7 @@ apiKeys:
 # Local model files for the activation-probe router ([router] kind = "probe"):
 # the encoder GGUF and the probe JSON, e.g.
 #   encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
-#   probe = "/models/probes/llmrouterbench-qwen35-9b.json"
+#   probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"   # shipped in the image
 models:
   mountPath: /models
   persistence:

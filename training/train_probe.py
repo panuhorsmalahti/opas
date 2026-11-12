@@ -29,7 +29,7 @@ Steps:
      routing at equal cost, single tiers, a dataset-identity router and the oracle.
   4. Refit on all prompts, export the probe JSON and a markdown report.
 
-Usage: uv run train_probe.py [--out ../models/probes/llmrouterbench-qwen35-9b.json]
+Usage: uv run train_probe.py [--out ../probes/llmrouterbench-qwen35-9b.json]
 """
 
 from __future__ import annotations
@@ -224,7 +224,7 @@ def random_at_cost(frac, cost, target):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--acts", type=Path, default=DATA / "acts-9b")
-    ap.add_argument("--out", type=Path, default=ROOT / "models" / "probes" / "llmrouterbench-qwen35-9b.json")
+    ap.add_argument("--out", type=Path, default=ROOT / "probes" / "llmrouterbench-qwen35-9b.json")
     ap.add_argument("--report", type=Path, default=ROOT / "docs" / "probe-results.md")
     ap.add_argument("--layer-step", type=int, default=2, help="sweep every Nth captured layer")
     args = ap.parse_args()
@@ -415,7 +415,7 @@ def write_report(path, meta, tiers, rate, n, idx_train, idx_test, baselines, swe
         L.append(f"| {r['lambda']:g} | {r['success']:.3f} @ ${r['cost']:.5f} | {share} | {r['random_same_cost']:.3f} | "
                  f"{'—' if bs is None else f'{bs:.3f}'} | {r['dataset_router'][0]:.3f} @ ${r['dataset_router'][1]:.5f} |")
     shown = out.relative_to(ROOT) if out.is_relative_to(ROOT) else out
-    L.append(f"\nThe exported probe (`{shown}`, git-ignored) is refit on all {n} prompts. The xlarge head is not evaluated: "
+    L.append(f"\nThe exported probe (`{shown}`, committed to the repo) is refit on all {n} prompts. The xlarge head is not evaluated: "
              "the benchmark has no model of that class.\n")
     path.write_text("\n".join(L))
     print(f"wrote {path}")

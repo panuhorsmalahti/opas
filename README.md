@@ -170,7 +170,7 @@ router_model = "auto"
 [router]
 kind = "probe"                                      # or "random"
 encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"
-probe = "models/probes/llmrouterbench-qwen35-9b.json"
+probe = "probes/llmrouterbench-qwen35-9b.json"    # included in the repo
 weights = { quality = 60, speed = 20, cost = 20 }  # default balance; requests can override
 
 [cache]
@@ -204,7 +204,7 @@ cargo build --release -p opas-encoder
 ./target/release/opas-encode --input data/llmrouterbench/sample.jsonl \
   --out data/llmrouterbench/acts-9b --max-tokens 1024
 
-# 4. Train, evaluate, export models/probes/llmrouterbench-qwen35-9b.json and docs/probe-results.md
+# 4. Train, evaluate, export probes/llmrouterbench-qwen35-9b.json and docs/probe-results.md
 cd training && uv run train_probe.py
 ```
 
