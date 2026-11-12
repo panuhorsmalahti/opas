@@ -86,6 +86,9 @@ add(f"""<defs>
   <linearGradient id="chosen" x1="0" y1="0" x2="1" y2="0">
     <stop offset="0" stop-color="#1f3b5c"/><stop offset="1" stop-color="#3b2a6b"/>
   </linearGradient>
+  <marker id="cacheHead" viewBox="0 0 10 10" refX="4" refY="5" markerWidth="4.2" markerHeight="4.2" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="{AMBER}"/>
+  </marker>
   <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
     <path d="M0,0 L10,5 L0,10 z" fill="{VIOLET}"/>
   </marker>
@@ -240,8 +243,13 @@ for i, (tier, model, chosen) in enumerate(models):
 # cache-aware badge
 cy = BOT - 78
 add(f'<rect x="{x4 + 22}" y="{cy}" width="{w4 - 44}" height="56" rx="13" fill="#0f1733" stroke="{AMBER}" stroke-opacity="0.55"/>')
-add(f'<path d="M{x4 + 50},{cy + 21} a9,9 0 1,1 -2,9" fill="none" stroke="{AMBER}" stroke-width="2.4" stroke-linecap="round"/>')
-add(f'<path d="M{x4 + 44},{cy + 14} l4,8 l6,-6" fill="none" stroke="{AMBER}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>')
+# Circular "reuse" arrow: a 290° arc whose arrowhead marker follows the arc's tangent.
+icx, icy, ir = x4 + 46, cy + 28, 10
+a0, a1 = math.radians(-60), math.radians(230)
+sx, sy = icx + ir * math.cos(a0), icy + ir * math.sin(a0)
+ex, ey = icx + ir * math.cos(a1), icy + ir * math.sin(a1)
+add(f'<path d="M{sx:.2f},{sy:.2f} A{ir},{ir} 0 1,1 {ex:.2f},{ey:.2f}" fill="none" stroke="{AMBER}" '
+    f'stroke-width="2.4" stroke-linecap="round" marker-end="url(#cacheHead)"/>')
 text(x4 + 70, cy + 24, "cache-aware", 14, AMBER, 700)
 text(x4 + 70, cy + 43, "warm prompt cache costs less", 12, MUTED, 400)
 

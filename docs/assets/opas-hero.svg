@@ -26,6 +26,9 @@
   <linearGradient id="chosen" x1="0" y1="0" x2="1" y2="0">
     <stop offset="0" stop-color="#1f3b5c"/><stop offset="1" stop-color="#3b2a6b"/>
   </linearGradient>
+  <marker id="cacheHead" viewBox="0 0 10 10" refX="4" refY="5" markerWidth="4.2" markerHeight="4.2" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/>
+  </marker>
   <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
     <path d="M0,0 L10,5 L0,10 z" fill="#8b5cf6"/>
   </marker>
@@ -433,8 +436,7 @@
 <text x="1292" y="568" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700" fill="#6c7aa8" text-anchor="start" letter-spacing="1">xlarge</text>
 <text x="1292" y="586" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="15" font-weight="600" fill="#a8b3d6" text-anchor="start" >claude-fable</text>
 <rect x="1272" y="612" width="266" height="56" rx="13" fill="#0f1733" stroke="#fbbf24" stroke-opacity="0.55"/>
-<path d="M1300,633 a9,9 0 1,1 -2,9" fill="none" stroke="#fbbf24" stroke-width="2.4" stroke-linecap="round"/>
-<path d="M1294,626 l4,8 l6,-6" fill="none" stroke="#fbbf24" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1301.00,631.34 A10,10 0 1,1 1289.57,632.34" fill="none" stroke="#fbbf24" stroke-width="2.4" stroke-linecap="round" marker-end="url(#cacheHead)"/>
 <text x="1320" y="636" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#fbbf24" text-anchor="start" >cache-aware</text>
 <text x="1320" y="655" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#a8b3d6" text-anchor="start" >warm prompt cache costs less</text>
 <path d="M346,380.0 Q367.0,374.0 388,380.0" fill="none" stroke="url(#flow)" stroke-width="3.5" stroke-linecap="round" marker-end="url(#head)" filter="url(#glowSoft)"/>
