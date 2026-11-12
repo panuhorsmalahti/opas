@@ -53,7 +53,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let listener = tokio::net::TcpListener::bind(&listen).await?;
-    tracing::info!("listening on http://{}", listener.local_addr()?);
+    let addr = listener.local_addr()?;
+    tracing::info!("listening on http://{addr}");
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            %addr,
+            "listening on a non-loopback address: opas has no client authentication, so anyone who can reach \
+             this port can use the configured provider keys. Keep it on a private network (in Docker: \
+             -p 127.0.0.1:8080:8080) or put an authenticating proxy in front"
+        );
+    }
     axum::serve(listener, opas_server::app(Arc::new(gateway)))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

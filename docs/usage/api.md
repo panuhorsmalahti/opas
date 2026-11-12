@@ -27,8 +27,15 @@ There are two ways to authenticate, chosen per upstream in the config:
 - **Pass-through:** without `api_key_env`, the client's own `Authorization`, `x-api-key`
   or `x-goog-api-key` header is forwarded.
 
-The server itself has no authentication of its own. Expose it only on trusted networks,
-or put it behind an authenticating proxy or ingress.
+The server has no client authentication of its own:
+
+- **Running directly:** it listens on `127.0.0.1:8080` by default, so only the local
+  machine can use it.
+- **In Docker:** publish the port on loopback (`-p 127.0.0.1:8080:8080`).
+- **In Kubernetes:** keep the ClusterIP Service.
+
+To expose it further, put an authenticating proxy or ingress in front. opas logs a
+warning at startup when it listens on a non-loopback address.
 
 ## OpenAI Chat Completions: `POST /v1/chat/completions`
 

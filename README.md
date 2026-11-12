@@ -218,7 +218,7 @@ Step-by-step guides live in [docs/usage](docs/README.md): [HTTP API](docs/usage/
 
 ```sh
 docker build -t opas .
-docker run -p 8080:8080 -e ANTHROPIC_API_KEY \
+docker run -p 127.0.0.1:8080:8080 -e ANTHROPIC_API_KEY \
   -v $PWD/opas.toml:/etc/opas/opas.toml:ro opas
 ```
 

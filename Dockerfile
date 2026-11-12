@@ -6,7 +6,7 @@
 # into the image: mount them (e.g. at /models) and point the config at them.
 #
 #   docker build -t opas .
-#   docker run -p 8080:8080 -v $PWD/opas.toml:/etc/opas/opas.toml:ro \
+#   docker run -p 127.0.0.1:8080:8080 -v $PWD/opas.toml:/etc/opas/opas.toml:ro \
 #     -e ANTHROPIC_API_KEY opas
 
 ARG RUST_VERSION=1.94
@@ -59,6 +59,8 @@ COPY --from=build /usr/local/bin/opas /usr/local/bin/opas-encode /usr/local/bin/
 COPY opas.example.toml /etc/opas/opas.toml
 
 USER opas
+# 0.0.0.0 inside the container is required for port publishing; keep the host side local
+# with `-p 127.0.0.1:8080:8080` (opas has no client authentication).
 ENV OPAS_CONFIG=/etc/opas/opas.toml \
     OPAS_LISTEN=0.0.0.0:8080 \
     RUST_LOG=info

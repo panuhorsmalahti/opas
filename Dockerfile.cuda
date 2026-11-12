@@ -4,7 +4,7 @@
 # on the host (docker run --gpus all ...) or the NVIDIA device plugin in Kubernetes.
 #
 #   docker build -f Dockerfile.cuda -t opas:cuda .
-#   docker run --gpus all -p 8080:8080 -v $PWD/models:/models:ro \
+#   docker run --gpus all -p 127.0.0.1:8080:8080 -v $PWD/models:/models:ro \
 #     -v $PWD/opas.toml:/etc/opas/opas.toml:ro opas:cuda
 #
 # CUDA_ARCHITECTURES limits the GPU architectures compiled for (faster build, smaller

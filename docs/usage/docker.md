@@ -18,11 +18,20 @@ Images from CI are published as `ghcr.io/OWNER/opas:<tag>` (see
 
 ```sh
 cp opas.example.toml opas.toml        # edit models, tiers, pricing
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   -e ANTHROPIC_API_KEY \
   -v "$PWD/opas.toml:/etc/opas/opas.toml:ro" \
   opas
 ```
+
+**Keep the port on localhost:** `-p 127.0.0.1:8080:8080` publishes it on the host's
+loopback interface only. opas has no client authentication, so `-p 8080:8080` would
+let anyone on your network use your provider API keys.
+
+- **Why the image listens on `0.0.0.0`:** inside a container, `127.0.0.1` is the
+  container's own loopback, so binding there would make the server unreachable through
+  port publishing. The host-side `127.0.0.1:` prefix is what keeps it local.
+- **To reach it from other machines:** put an authenticating reverse proxy in front.
 
 | Environment variable | Default in the image | Meaning |
 |---|---|---|
@@ -47,7 +56,7 @@ lambda = 10.0
 ```
 
 ```sh
-docker run --rm -p 8080:8080 -e ANTHROPIC_API_KEY \
+docker run --rm -p 127.0.0.1:8080:8080 -e ANTHROPIC_API_KEY \
   -v "$PWD/models:/models:ro" \
   -v "$PWD/opas.toml:/etc/opas/opas.toml:ro" \
   --memory 12g \
@@ -67,7 +76,7 @@ there. See [hardware](hardware.md) for measurements and options.
 services:
   opas:
     image: ghcr.io/OWNER/opas:latest
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]   # loopback only; opas has no client auth
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     volumes:
