@@ -1,53 +1,80 @@
 # opastin
 
-An LLM router written in Rust. It picks a model for each request and works in three ways:
+An LLM router written in Rust. Clients send requests to opastin in the API they already
+use; opastin picks a model for each request and proxies it to that model's provider. It
+can also return only the decision, or be used as a library.
 
-1. **As a gateway.** Exposes OpenAI-compatible and Anthropic-compatible endpoints,
-   routes each request, and proxies it to the chosen model, including streamed (SSE)
-   responses.
-2. **As a decision API.** Returns which model it would choose and sends nothing
-   upstream. Your own code then makes the call.
-3. **As a library (SDK).** Add the `opastin` crate and call the router in-process.
+- **Four APIs, unchanged on the wire:** OpenAI Chat Completions, Anthropic Messages,
+  Open Responses (OpenAI Responses API) and Gemini Interactions. Responses stream through
+  as-is, and errors come back in each API's own format.
+- **Generic tiers:** you describe your models as `small`, `medium`, `large` or `xlarge`
+  (Fable-class), with prices. The router reasons about tiers, not model names.
+- **Routing on model activations:** the probe router runs a local open-weights model
+  (Qwen3.5-9B) over the request, without generating anything. A trained linear probe
+  turns its hidden states into each tier's chance of success and expected output tokens.
+- **Cache-aware:** opastin knows which model served each conversation. Switching models
+  mid-conversation loses that provider's prompt cache, so a switch has to be worth it.
+- **Provider-state affinity:** follow-ups that reference stored provider state
+  (`previous_response_id`, `previous_interaction_id`) always go back to the model that
+  holds it.
 
-The only router so far is **random**: a uniform random choice between the
-configured models. A smarter router should beat it at the same cost.
+Background research: [llm-routers.md](llm-routers.md) (a survey of routers, APIs and
+benchmarks) and [docs/complexity-from-activations.md](docs/complexity-from-activations.md)
+(the activation-probe design and measurements).
 
-Research notes on existing routers, their APIs, and routing benchmarks are in
-[llm-routers.md](llm-routers.md).
+## How routing works
 
-## Layout
+For each request:
 
-| Path | What |
-|---|---|
-| `crates/opastin` | Library / SDK: request parsing, the `Router` trait, `RandomRouter`, config, and the `gateway` feature for forwarding |
-| `crates/opastin-server` | The `opastin` binary: HTTP endpoints on top of the library |
-| `crates/opastin-encoder` | In-process llama.cpp encoder: runs a local model's prefill pass and captures per-layer hidden states, the input for complexity-based routing. Includes the `opastin-encode` CLI. |
-| `probe/` | Python (MLX) reference extractor and cross-check scripts |
-| `docs/complexity-from-activations.md` | Research and design notes for routing on model activations |
-| `opastin.example.toml` | Example config with two Claude models |
+1. **Parse.** The request is parsed into one format-independent view: system prompt,
+   messages (including tool calls and results), tools, and stream flag.
+2. **Check stored state.** If it continues provider-stored state (`previous_response_id` /
+   `previous_interaction_id`) that opastin saw being created, it goes to the same model.
+   *Router: `affinity`.*
+3. **Look up the conversation.** Otherwise the message history is fingerprinted prefix by
+   prefix. If an earlier turn of this conversation was served within the cache TTL, the
+   router is told which model served it and roughly how many prompt tokens that
+   provider has cached.
+4. **Route.** The configured router picks a candidate:
+   - **`random`:** uniform random, the baseline any real router must beat at equal
+     cost. It stays on the previous model of a continued conversation, because a random
+     switch only loses the cache.
+   - **`probe`:**
+     - The encoder (Qwen3.5-9B, in-process via llama.cpp) runs one prefill pass over the
+       chat-formatted request, and the hidden state of one layer is taken.
+     - For each candidate's tier, linear heads predict the success probability `p̂` and
+       output tokens.
+     - Cost = prompt tokens × input price + predicted output tokens × output price, using
+       the candidate's `pricing` or its tier's defaults. For the model that served the
+       previous turn, the cached part of the prompt is billed at the cached-input price.
+     - The router picks `argmax p̂ − λ·cost`.
+5. **Forward.** The request goes to the chosen model's upstream for that API format,
+   with the model name rewritten. The response streams back. For stateful APIs, the
+   response id is recorded for step 2.
 
-## Run the server
+Default tier prices (USD per million tokens) are used when a model has no `pricing`:
+
+| Tier | Input | Cached input | Output |
+|---|---|---|---|
+| small | 0.10 | 0.01 | 0.50 |
+| medium | 2.00 | 0.10 | 10.00 |
+| large | 4.00 | 0.20 | 20.00 |
+| xlarge | 8.00 | 0.20 | 40.00 |
+
+## Quick start
 
 ```sh
 cp opastin.example.toml opastin.toml
 export ANTHROPIC_API_KEY=...
-cargo run -p opastin-server -- --config opastin.toml
+cargo run --release -p opastin-server -- --config opastin.toml
 ```
 
-Set `RUST_LOG=debug` for more detailed logs.
+The first build compiles llama.cpp for the probe router, which needs cmake
+(`brew install cmake` or `apt install cmake clang libclang-dev`). Without it, build the
+random-router-only server with `cargo build -p opastin-server --no-default-features`.
 
-### 1. Routing endpoints
-
-| Endpoint | Format |
-|---|---|
-| `POST /v1/chat/completions` | OpenAI Chat Completions |
-| `POST /v1/messages` | Anthropic Messages |
-
-- **Routed:** send `"model": "auto"` (the `router_model` setting) to have the router
-  choose.
-- **Direct:** send a configured model id to skip routing and go straight to that model.
-- **Point an SDK at it:** existing SDKs and tools only need a new base URL, e.g.
-  `http://127.0.0.1:8080/v1` for OpenAI or `http://127.0.0.1:8080` for Anthropic.
+Point an SDK at it (base URL `http://127.0.0.1:8080/v1`, or `http://127.0.0.1:8080` for
+Anthropic SDKs), or call it directly:
 
 ```sh
 curl localhost:8080/v1/messages -H 'content-type: application/json' -d '{
@@ -56,85 +83,188 @@ curl localhost:8080/v1/messages -H 'content-type: application/json' -d '{
 }'
 ```
 
-Response headers on these endpoints:
+### Endpoints
 
-- `x-opastin-model`: the model that served the request.
-- `x-opastin-router`, `x-opastin-decision-id`: present on routed requests only.
+| Endpoint | API |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI Chat Completions |
+| `POST /v1/messages` | Anthropic Messages |
+| `POST /v1/responses` | Open Responses |
+| `POST /v1beta/interactions`, `POST /v1/interactions` | Gemini Interactions |
+| `POST /v1/route` | Decision only (nothing forwarded) |
+| `GET /v1/models`, `GET /healthz` | Model list, liveness |
 
-Errors use the error format of the API that was called.
+**Routed vs direct:** send `"model": "auto"` to be routed, or a configured model id to go
+direct.
 
-**Credentials:**
+**Response headers:**
 
-- If a model's upstream sets `api_key_env`, opastin sends that key. Otherwise it
-  forwards the client's `Authorization` or `x-api-key` header.
-- `anthropic-version` and `anthropic-beta` are forwarded as sent. `anthropic-version`
-  defaults to `2023-06-01` if the client doesn't send one.
+| Header | Present | Meaning |
+|---|---|---|
+| `x-opastin-model` | always | the model that served the request |
+| `x-opastin-router` | routed requests | the router that decided |
+| `x-opastin-decision-id` | routed requests | the decision's id |
+| `x-opastin-previous-model` | continued conversations | the model that served the previous turn |
 
-**Limitation:** a request is only routed to models that have an upstream for the same
-API format. Translating between OpenAI and Anthropic formats is not implemented.
+**Credentials:** if a model's upstream sets `api_key_env`, opastin uses that key.
+Otherwise it forwards the client's own credentials (`Authorization`, `x-api-key` or
+`x-goog-api-key`).
 
-### 2. Decision-only endpoint
+### Decision only, with your own models
+
+`/v1/route` takes a request in any supported API, plus an optional list of candidates
+described by tier and pricing:
 
 ```sh
 curl localhost:8080/v1/route -H 'content-type: application/json' -d '{
-  "api": "anthropic_messages",
-  "request": {"model": "auto", "max_tokens": 256, "messages": [{"role": "user", "content": "hi"}]}
+  "api": "open_responses",
+  "request": {"model": "auto", "input": "Refactor this module to async"},
+  "candidates": [
+    {"id": "my-small", "tier": "small"},
+    {"id": "my-large", "tier": "large", "pricing": {"input": 3, "cached_input": 0.3, "output": 15}}
+  ]
 }'
-# {"decision_id":"…","router":"random","model":"claude-haiku-5-5",
-#  "upstream_model":"claude-haiku-5-5","reason":"uniform random pick from 2 candidates",
-#  "api":"anthropic_messages"}
+# {"model": "my-large", "router": "probe", "reason": "...", "conversation": null, ...}
 ```
 
-`api` is `openai_chat` or `anthropic_messages`. `GET /v1/models` lists the router model
-and the configured models.
+`api` is one of `openai_chat`, `anthropic_messages`, `open_responses` or
+`gemini_interactions`. Without `candidates`, the configured models are used.
 
-### 3. Library / SDK
+### As a library
+
+Use the crates directly: `opastin` for decisions and forwarding, `opastin-encoder` for
+the encoder and `ProbeRouter`. Each crate has its own README:
+
+- [crates/opastin](crates/opastin/README.md)
+- [crates/opastin-server](crates/opastin-server/README.md)
+- [crates/opastin-encoder](crates/opastin-encoder/README.md)
+
+## Configuration
+
+See [opastin.example.toml](opastin.example.toml). In short:
 
 ```toml
-[dependencies]
-opastin = { path = "crates/opastin" }                         # decision only
-# opastin = { path = "crates/opastin", features = ["gateway"] }  # plus forwarding
+router_model = "auto"
+
+[router]
+kind = "probe"                                      # or "random"
+encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"
+probe = "models/probes/llmrouterbench-qwen35-9b.json"
+lambda = 10.0                                       # success probability per USD
+
+[cache]
+ttl_secs = 300                                      # provider prompt-cache lifetime
+
+[[models]]
+id = "claude-haiku-5-5"
+tier = "small"
+pricing = { input = 0.10, cached_input = 0.01, output = 0.50 }
+anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
+# also: openai = {...}, responses = {...}, interactions = {...}
 ```
 
-```rust
-use opastin::{ApiFormat, Candidate, RandomRouter, RouteRequest, Router};
+## Training the probe
 
-let request = RouteRequest::from_json(ApiFormat::OpenaiChat, &body)?;
-let candidates = [Candidate::from("claude-opus-5-5"), Candidate::from("claude-haiku-5-5")];
-let decision = RandomRouter::new().route(&request, &candidates).await?;
-// decision.model is the model to call
-```
-
-Two runnable examples:
-
-- `cargo run -p opastin --example decide`: decision only.
-- `cargo run -p opastin --features gateway --example gateway`: in-process routing and
-  forwarding with `opastin::gateway::Gateway`.
-
-To add your own routing logic, implement the `Router` trait. It is async, so a router
-can call a classifier or another model. Then pass it to `Gateway::with_router`.
-
-## Activation encoder (experimental)
-
-The encoder runs a GGUF model (default: Qwen3.5-9B Q8_0) inside the Rust process with
-llama.cpp. It captures the hidden state after every layer for one prefill pass, and
-generates no tokens. Model files live in `models/`, which git ignores.
-
-The first build compiles llama.cpp, so it needs cmake (`brew install cmake`).
+Training is offline. The router only loads the exported probe file. Model weights and
+datasets go in `models/` and `data/`, which git ignores.
 
 ```sh
+# 1. Encoder model (9.5 GB) and LLMRouterBench (1.3 GB)
+mkdir -p models/gguf
+curl -L -o models/gguf/Qwen3.5-9B-Q8_0.gguf \
+  https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf
+./scripts/download-llmrouterbench.sh
+
+# 2. Labels (per prompt and model: score, cost, output tokens) and a stratified sample
+cd training && uv run prepare_llmrouterbench.py && cd ..
+
+# 3. Activations for the sample (Rust encoder; every layer, last-token and mean pooling)
 cargo build --release -p opastin-encoder
-./target/release/opastin-encode --demo
-./target/release/opastin-encode --input requests.jsonl --out probe/out/acts   # .npy outputs
-OPASTIN_TEST_MODEL=models/gguf/Qwen3.5-0.8B-Q8_0.gguf cargo test --release -p opastin-encoder
+./target/release/opastin-encode --input data/llmrouterbench/sample.jsonl \
+  --out data/llmrouterbench/acts-9b --max-tokens 1024
+
+# 4. Train, evaluate, export models/probes/llmrouterbench-qwen35-9b.json and docs/probe-results.md
+cd training && uv run train_probe.py
 ```
 
-See [docs/complexity-from-activations.md](docs/complexity-from-activations.md) for how
-these activations are meant to drive routing.
+**What training does:**
+
+- **Tiers:** the 13 LLMRouterBench models are ranked by overall success and split into
+  small, medium and large thirds. The xlarge (Fable-class) head is extrapolated one step
+  beyond large, because no benchmark model is in that class.
+- **Model selection:** the layer, pooling and regularization are chosen by 5-fold
+  cross-validation, scored by *within-benchmark* AUROC, so the probe is rewarded for
+  ranking difficulty rather than for recognizing which benchmark a prompt came from.
+- **Evaluation:** a held-out split compares probe routing against random routing at the
+  same cost, single tiers, a benchmark-identity router and the oracle.
+
+Results: [docs/probe-results.md](docs/probe-results.md).
+
+`training/reference/` holds a Python (MLX) reimplementation of the encoder, used to
+cross-check the Rust encoder; see its README.
+
+## Deployment
+
+**Docker:**
+
+```sh
+docker build -t opastin .
+docker run -p 8080:8080 -e ANTHROPIC_API_KEY \
+  -v $PWD/opastin.toml:/etc/opastin/opastin.toml:ro opastin
+```
+
+The image contains `opastin` and `opastin-encode`. For the probe router, mount the model
+and probe files (e.g. `-v $PWD/models:/models:ro`) and use `/models/...` paths in the
+config. The image's llama.cpp build runs on CPU.
+
+**Kubernetes:**
+
+```sh
+kubectl -n opastin create secret generic opastin-api-keys --from-literal=ANTHROPIC_API_KEY=...
+kubectl -n opastin apply -k deploy/kubernetes
+```
+
+**Helm:**
+
+```sh
+helm install opastin deploy/helm/opastin \
+  --set apiKeys.existingSecret=opastin-api-keys \
+  --set-file config=opastin.toml
+```
+
+For the probe router, enable `models.persistence` and list files under `models.download`;
+an init container fetches them.
+
+Cache-aware routing and affinity state are kept in memory in each pod, so the Service uses
+`ClientIP` session affinity.
+
+**CI:** `.github/workflows/ci.yml` runs on every push and PR:
+
+- format and strict clippy;
+- tests on Linux and macOS (Metal);
+- a build without llama.cpp;
+- the training tools;
+- Helm and Kustomize rendering;
+- a Docker build.
+
+`release.yml` publishes multi-arch images to GHCR on pushes to `main` and on `v*` tags.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `crates/opastin` | Library / SDK: request parsing for four APIs, `Router` trait, tiers, cache-aware conversation tracking, config, gateway |
+| `crates/opastin-server` | The `opastin` HTTP server |
+| `crates/opastin-encoder` | In-process llama.cpp encoder, probe format, `ProbeRouter`, `opastin-encode` CLI |
+| `training/` | Offline tooling (Python): dataset preparation, probe training; `reference/` MLX cross-check |
+| `scripts/` | Dataset download |
+| `deploy/` | Kubernetes manifests and Helm chart |
+| `docs/` | Design notes and probe results |
 
 ## Development
 
 ```sh
-cargo test     # unit tests, plus end-to-end tests against a mock upstream
-cargo clippy --all-targets --all-features
+cargo test --workspace                                   # unit and end-to-end tests (mock upstream)
+cargo clippy --workspace --all-targets -- -D warnings
+OPASTIN_TEST_MODEL=models/gguf/Qwen3.5-0.8B-Q8_0.gguf cargo test --release -p opastin-encoder
 ```
