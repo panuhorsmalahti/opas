@@ -120,6 +120,16 @@ fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> 
             if !untiered.is_empty() {
                 tracing::warn!(models = ?untiered, "models without a `tier` are never chosen by the probe router");
             }
+            for (what, path) in [("encoder model", encoder_model), ("probe", probe)] {
+                if !path.is_file() {
+                    return Err(format!(
+                        "[router] {what} `{}` not found. Download the encoder model (see the README quick start; \
+                         in Docker, mount it at /models), or remove [router] to run a plain proxy",
+                        path.display()
+                    )
+                    .into());
+                }
+            }
             tracing::info!(encoder = %encoder_model.display(), probe = %probe.display(), %weights, "loading probe router");
             let router =
                 opas_encoder::ProbeRouter::load(encoder_model, probe, *weights, *n_gpu_layers)?;
