@@ -11,7 +11,7 @@ decisions. Nothing is generated: one prefill pass over the request is enough.
 | `Encoder` (lib root) | Loads a GGUF model and runs one `llama_decode` per request. llama.cpp's graph callback (`cb_eval`) copies the residual stream after every decoder layer (`l_out-N`), pooled by last token and by mean. Prompts are formatted with the Qwen chat template; long prompts keep their head and tail. |
 | `chat` | Qwen ChatML formatting from an opas `RouteRequest`, byte-identical to the HF template (golden tests); the thinking mode is pinned explicitly |
 | `probe` | The probe file format (`opas-probe/2`): per-tier linear heads for success probability and output tokens, over one layer's hidden state |
-| `router` | `ProbeRouter`, an opas `Router`. It predicts each candidate tier's success and output tokens, prices them with the candidate's pricing (cache-aware), and picks `argmax p − λ·cost` |
+| `router` | `ProbeRouter`, an opas `Router`. It predicts each candidate tier's success and output tokens, turns them into cost and response time with the candidate's pricing and speed (cache-aware), scores quality / speed / cost with the request's weights, and returns all estimates |
 | `npy` | Minimal `.npy` writer for exporting activations to training |
 | `bin/encode.rs` | `opas-encode` CLI: extract activations for JSONL requests into `.npy` files (training input) |
 

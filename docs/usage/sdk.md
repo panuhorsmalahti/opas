@@ -57,7 +57,7 @@ use opas_encoder::ProbeRouter;
 let router = ProbeRouter::load(
     "models/gguf/Qwen3.5-9B-Q8_0.gguf",              // encoder model
     "models/probes/llmrouterbench-qwen35-9b.json",   // probe weights
-    10.0,                                            // λ: success probability per USD
+    opas::Weights::default(),                        // quality 60 / speed 20 / cost 20
     -1,                                              // encoder layers on the GPU (-1 = all)
 )?;
 let decision = router.route(&request, &candidates).await?;
@@ -66,11 +66,17 @@ let decision = router.route(&request, &candidates).await?;
 **Loading and threading:** loading takes a few seconds. `ProbeRouter` is cheap to clone,
 and it runs the encoder on a blocking thread, so it is safe to call from async code.
 
-**Candidates** need a `tier`; those without one are skipped. The reason string lists each
-candidate's predicted success, output tokens, cost and score.
+**Candidates** need a `tier`; those without one are skipped.
 
-**Without the async trait:** `rank_blocking(&request, &candidates)` returns the scored
-candidates, best first.
+**Estimates:** `decision.estimates` lists every candidate, best first. Each has
+`p_success`, `expected_cost_usd`, `expected_response_time_s`, `expected_output_tokens`,
+the three 0–1 scores and the weighted `score`.
+
+**Weights:** set `request.weights = Some(Weights::new(60.0, 20.0, 20.0))`, or
+`Some(Preference::Cost.weights())`, to override the router's default for one request.
+
+**Without the async trait:** `estimate_blocking(&request, &candidates)` returns the scored
+estimates, best first.
 
 ## 3. Cache-aware routing in your own loop
 

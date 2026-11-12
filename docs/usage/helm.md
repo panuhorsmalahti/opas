@@ -71,7 +71,7 @@ config: |
   kind = "probe"
   encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
   probe = "/models/probes/llmrouterbench-qwen35-9b.json"
-  lambda = 10.0
+  weights = { quality = 60, speed = 20, cost = 20 }
 
   [[models]]
   id = "claude-haiku-5-5"

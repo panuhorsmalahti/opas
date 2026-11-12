@@ -95,6 +95,41 @@ curl localhost:8080/v1beta/interactions \
 A follow-up with `previous_interaction_id` is pinned to the model that created the
 interaction, just like `previous_response_id`.
 
+## Choosing the balance: quality, speed and cost
+
+For every candidate, the probe router predicts:
+
+- the probability of success;
+- the expected cost, from your prices and the predicted output tokens;
+- the expected response time: total time to the complete response, from the model's
+  speed and the predicted output tokens.
+
+It scores each 0–1 and picks the best weighted average. The default weights are quality
+60 / speed 20 / cost 20. Set your own per request:
+
+| Where | How |
+|---|---|
+| Proxy endpoints | header `x-opas-weights: quality=80,speed=10,cost=10` or `x-opas-preference: cost` |
+| `/v1/route` | body field `"weights": {"quality": 80, "speed": 10, "cost": 10}` or `"preference": "cost"` |
+| Server default | `[router] weights = { quality = 60, speed = 20, cost = 20 }` |
+
+| Preset | Quality / speed / cost |
+|---|---|
+| `quality` | 100 / 0 / 0 |
+| `balanced` (default) | 60 / 20 / 20 |
+| `cost` | 20 / 10 / 70 |
+| `speed` | 20 / 70 / 10 |
+
+**How the scores are computed:**
+
+- **quality** is the predicted success probability.
+- **cost** is 1 for the cheapest candidate, falling on a log scale to 0 at 100× the
+  cheapest.
+- **speed** is 1 for the fastest, falling to 0 at 10× slower.
+
+The ranges are fixed, so a few percent difference in price cannot swing a decision.
+Proxied responses carry the chosen model's prediction in `x-opas-estimate`.
+
 ## Response headers
 
 | Header | When | Meaning |
@@ -102,6 +137,7 @@ interaction, just like `previous_response_id`.
 | `x-opas-model` | always | Configured model id that served the request |
 | `x-opas-router` | routed requests | `random`, `probe`, or `affinity` (pinned by stored provider state) |
 | `x-opas-decision-id` | routed requests | Unique id of the decision, for logs and outcome feedback |
+| `x-opas-estimate` | routed requests (probe router) | The chosen model's `p_success`, `cost_usd` and `response_time_s` |
 | `x-opas-previous-model` | continued conversations | Model that served the previous turn (cache-aware routing recognized the conversation) |
 
 ## Multi-turn conversations and caching
@@ -140,10 +176,15 @@ curl localhost:8080/v1/route -H 'content-type: application/json' -d '{
   "decision_id": "6f1c…",
   "router": "probe",
   "model": "default",
-  "upstream_model": null,
-  "reason": "lambda=10; default (medium): p=0.71 out≈640 tok cost=$0.0068 score=0.642; …",
+  "reason": "best weighted score 0.712 (quality=60,speed=20,cost=20): p=0.71, cost $0.0068, 8.6s",
   "api": "anthropic_messages",
-  "conversation": null
+  "weights": {"quality": 60.0, "speed": 20.0, "cost": 20.0},
+  "estimates": [
+    {"model": "default", "tier": "medium", "p_success": 0.71, "expected_cost_usd": 0.0068,
+     "expected_response_time_s": 8.6, "expected_output_tokens": 640, "cached_prompt_tokens": 0,
+     "quality_score": 0.71, "speed_score": 0.53, "cost_score": 0.48, "score": 0.629},
+    "…one entry per candidate, best first…"
+  ]
 }
 ```
 
@@ -152,6 +193,9 @@ curl localhost:8080/v1/route -H 'content-type: application/json' -d '{
 - `api`: one of `openai_chat`, `anthropic_messages`, `open_responses`,
   `gemini_interactions`.
 - `request`: the request body in that API.
+- `weights` (optional): `{"quality": 60, "speed": 20, "cost": 20}`; only the ratios
+  matter. Or `preference`: `quality`, `balanced`, `cost` or `speed`. The default is
+  the server's configured weights (60 / 20 / 20 unless changed).
 - `candidates` (optional): the models to choose from. Each has an `id`, a `tier`
   (`small`, `medium`, `large`, `xlarge`) and optional `pricing` in USD per million
   tokens; without pricing, tier defaults apply. Without `candidates`, the configured

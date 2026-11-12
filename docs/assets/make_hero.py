@@ -112,7 +112,7 @@ add(f'<rect width="{W}" height="{H}" rx="28" fill="url(#glowB)"/>')
 # --- title ---------------------------------------------------------------------------
 text(56, 82, "opas", 46, TEXT, 800, extra='letter-spacing="-1"')
 text(176, 82, "route every LLM request by reading a model's activations", 22, MUTED, 400)
-text(56, 116, "one prefill pass · no tokens generated · a linear probe predicts success and cost per tier",
+text(56, 116, "one prefill pass · no tokens generated · predicts success, cost and response time · you choose the balance",
      16, FAINT, 400)
 
 TOP, BOT = 150, 690
@@ -136,15 +136,15 @@ add(f'<rect x="{x1 + 22}" y="{by}" width="{w1 - 44}" height="132" rx="16" fill="
 add(f'<path d="M{x1 + 50},{by + 132} l10,16 l10,-16 z" fill="#1d2a57" stroke="#34457f"/>')
 add(f'<rect x="{x1 + 52}" y="{by + 127}" width="22" height="8" fill="#1d2a57"/>')
 text(x1 + 40, by + 30, "user", 12, TEAL, 700, extra='letter-spacing="1"')
-for k, line in enumerate(["Our async proxy truncates", "SSE streams under load.", "Find the cause and fix it,",
-                          "with tests."]):
+for k, line in enumerate(["Rewrite our image-resize", "module in Rust, compile", "it to WASM, and call it",
+                          "from the Node.js server."]):
     text(x1 + 40, by + 56 + k * 21, line, 15, TEXT, 400)
 text(x1 + 24, BOT - 18, '"model": "auto"', 13, MUTED, 400, family=MONO)
 
 # --- 2. encoder ------------------------------------------------------------------------
 x2, w2 = 400, 400
 card(x2, TOP, w2, CH, "Encoder prefill", 2)
-text(x2 + 24, TOP + 84, "Qwen3.5-9B · in-process llama.cpp", 13.5, FAINT)
+text(x2 + 24, TOP + 84, "Qwen3.5-9B · one pass over the prompt", 13.5, FAINT)
 rng = random.Random(7)
 n_layers, n_cells = 11, 22
 lx, lw = x2 + 52, 250
@@ -171,10 +171,10 @@ add(f'<rect x="{lx - 6}" y="{hy - 5}" width="{lw + 8}" height="{row_h + 10}" rx=
 text(lx - 12, hy + 16, "L24", 11.5, AMBER, 700, "end", family=MONO)
 # tokens flowing in at the bottom
 ty = stack_top + n_layers * (row_h + gap) + 14
-for k, tok in enumerate(["Our", "async", "proxy", "…", "tests", "&lt;think&gt;"]):
-    tx = lx + k * 42
-    add(f'<rect x="{tx}" y="{ty}" width="38" height="22" rx="6" fill="#0f1733" stroke="{CARD_EDGE}"/>')
-    text(tx + 19, ty + 15, tok, 10.5, MUTED, 500, "middle", family=MONO)
+for k, tok in enumerate(["Rewrite", "image", "Rust", "…", "WASM", "&lt;think&gt;"]):
+    tx = lx - 6 + k * 50
+    add(f'<rect x="{tx}" y="{ty}" width="46" height="22" rx="6" fill="#0f1733" stroke="{CARD_EDGE}"/>')
+    text(tx + 23, ty + 15, tok, 10.5, MUTED, 500, "middle", family=MONO)
 text(x2 + w2 / 2, ty + 56, "residual stream after every layer, read at the last prompt token", 12.5, FAINT, 400, "middle")
 # hidden-state vector pulled out of L24
 vx, vy = x2 + w2 - 50, hy - 70
@@ -188,63 +188,69 @@ text(vx + 9, vy + 12 * 15 + 30, "4096-d", 11.5, AMBER, 600, "middle", family=MON
 
 # --- 3. probe ----------------------------------------------------------------------------
 x3, w3 = 860, 330
-card(x3, TOP, w3, CH, "Linear probe per tier", 3)
-text(x3 + 24, TOP + 84, "~4k weights per head, microseconds", 13.5, FAINT)
-add(f'<rect x="{x3 + 22}" y="{TOP + 104}" width="{w3 - 44}" height="64" rx="12" fill="#0f1733" stroke="{CARD_EDGE}"/>')
-text(x3 + w3 / 2, TOP + 131, "p̂ = σ(w·h + b)", 17, TEXT, 600, "middle", family=MONO)
-text(x3 + w3 / 2, TOP + 155, "tokens = e^(v·h + c)", 14, MUTED, 400, "middle", family=MONO)
-tiers = [("small", 0.58, 1), ("medium", 0.79, 2), ("large", 0.86, 3), ("xlarge", 0.91, 4)]
-text(x3 + 24, TOP + 206, "tier", 12, FAINT, 700, extra='letter-spacing="1"')
-text(x3 + 104, TOP + 206, "P(success)", 12, FAINT, 700, extra='letter-spacing="1"')
-text(x3 + w3 - 24, TOP + 206, "cost", 12, FAINT, 700, "end", extra='letter-spacing="1"')
-for i, (name, p, cost) in enumerate(tiers):
-    y = TOP + 230 + i * 72
+card(x3, TOP, w3, CH, "Predict every option", 3)
+text(x3 + 24, TOP + 84, "linear probe per tier, microseconds", 13.5, FAINT)
+tiers = [("small", 0.58, 1, "2s"), ("medium", 0.79, 2, "6s"), ("large", 0.86, 3, "12s"), ("xlarge", 0.91, 4, "20s")]
+hy0 = TOP + 124
+text(x3 + 24, hy0, "tier", 12, FAINT, 700, extra='letter-spacing="1"')
+text(x3 + 100, hy0, "success", 12, FAINT, 700, extra='letter-spacing="1"')
+text(x3 + 262, hy0, "cost", 12, FAINT, 700, "end", extra='letter-spacing="1"')
+text(x3 + w3 - 24, hy0, "time", 12, FAINT, 700, "end", extra='letter-spacing="1"')
+for i, (name, p, cost, secs) in enumerate(tiers):
+    y = TOP + 146 + i * 84
     text(x3 + 24, y + 22, name, 15.5, TEXT, 600)
-    bw = 100
-    add(f'<rect x="{x3 + 104}" y="{y + 8}" width="{bw}" height="18" rx="9" fill="#0f1733"/>')
-    add(f'<rect x="{x3 + 104}" y="{y + 8}" width="{bw * p:.1f}" height="18" rx="9" fill="url(#bar)"/>')
-    text(x3 + 104 + bw + 10, y + 22, f"{p:.2f}", 13, MUTED, 600, family=MONO)
-    text(x3 + w3 - 24, y + 22, "$" * cost, 15, AMBER, 700, "end", family=MONO)
+    bw = 82
+    add(f'<rect x="{x3 + 100}" y="{y + 8}" width="{bw}" height="18" rx="9" fill="#0f1733"/>')
+    add(f'<rect x="{x3 + 100}" y="{y + 8}" width="{bw * p:.1f}" height="18" rx="9" fill="url(#bar)"/>')
+    text(x3 + 100 + bw + 8, y + 22, f"{p:.2f}", 12.5, MUTED, 600, family=MONO)
+    text(x3 + 262, y + 22, "$" * cost, 13, AMBER, 700, "end", family=MONO)
+    text(x3 + w3 - 24, y + 22, secs, 13, TEAL, 700, "end", family=MONO)
     if i < 3:
-        add(f'<line x1="{x3 + 24}" y1="{y + 48}" x2="{x3 + w3 - 24}" y2="{y + 48}" stroke="{CARD_EDGE}" stroke-opacity="0.6"/>')
-text(x3 + w3 / 2, BOT - 22, "cost = tokens × your prices", 12.5, FAINT, 400, "middle")
+        add(f'<line x1="{x3 + 24}" y1="{y + 56}" x2="{x3 + w3 - 24}" y2="{y + 56}" stroke="{CARD_EDGE}" stroke-opacity="0.6"/>')
+text(x3 + w3 / 2, BOT - 40, "success from the activations;", 12.5, FAINT, 400, "middle")
+text(x3 + w3 / 2, BOT - 20, "cost and time from your prices and speeds", 12.5, FAINT, 400, "middle")
 
 # --- 4. route ----------------------------------------------------------------------------
 x4, w4 = 1250, 310
 card(x4, TOP, w4, CH, "Route", 4)
-text(x4 + 24, TOP + 84, "best value wins", 13.5, FAINT)
-add(f'<rect x="{x4 + 22}" y="{TOP + 104}" width="{w4 - 44}" height="64" rx="12" fill="#0f1733" stroke="{CARD_EDGE}"/>')
-text(x4 + w4 / 2, TOP + 133, "argmax  p̂ − λ·cost", 17, TEXT, 600, "middle", family=MONO)
-text(x4 + w4 / 2, TOP + 155, "λ = cost / quality trade-off", 12, MUTED, 400, "middle")
+text(x4 + 24, TOP + 84, "you set the balance per request", 13.5, FAINT)
+add(f'<rect x="{x4 + 22}" y="{TOP + 102}" width="{w4 - 44}" height="112" rx="12" fill="#0f1733" stroke="{CARD_EDGE}"/>')
+for i, (label, pct, color) in enumerate([("quality", 60, VIOLET), ("speed", 20, TEAL), ("cost", 20, AMBER)]):
+    y = TOP + 126 + i * 30
+    text(x4 + 40, y + 5, label, 13, TEXT, 600)
+    bx, bw = x4 + 112, 120
+    add(f'<rect x="{bx}" y="{y - 6}" width="{bw}" height="12" rx="6" fill="#1b2650"/>')
+    add(f'<rect x="{bx}" y="{y - 6}" width="{bw * pct / 60:.1f}" height="12" rx="6" fill="{color}"/>')
+    text(x4 + w4 - 40, y + 5, f"{pct}%", 13, MUTED, 700, "end", family=MONO)
 models = [("small", "claude-haiku", False), ("medium", "your-model", True), ("large", "claude-opus", False),
           ("xlarge", "claude-fable", False)]
 for i, (tier, model, chosen) in enumerate(models):
-    y = TOP + 192 + i * 60
+    y = TOP + 230 + i * 56
     fill = "url(#chosen)" if chosen else "#0f1733"
     stroke = TEAL if chosen else CARD_EDGE
-    add(f'<rect x="{x4 + 22}" y="{y}" width="{w4 - 44}" height="50" rx="13" fill="{fill}" stroke="{stroke}" '
+    add(f'<rect x="{x4 + 22}" y="{y}" width="{w4 - 44}" height="46" rx="13" fill="{fill}" stroke="{stroke}" '
         f'stroke-width="{2.5 if chosen else 1}" {"filter=\"url(#glowSoft)\"" if chosen else ""}/>')
-    text(x4 + 42, y + 22, tier, 12, TEAL if chosen else FAINT, 700, extra='letter-spacing="1"')
-    text(x4 + 42, y + 41, model, 15, TEXT if chosen else MUTED, 600, family=MONO)
+    text(x4 + 42, y + 20, tier, 12, TEAL if chosen else FAINT, 700, extra='letter-spacing="1"')
+    text(x4 + 42, y + 38, model, 15, TEXT if chosen else MUTED, 600, family=MONO)
     if chosen:
-        add(f'<circle cx="{x4 + w4 - 48}" cy="{y + 25}" r="13" fill="{TEAL}"/>')
-        add(f'<path d="M{x4 + w4 - 54},{y + 25} l4,5 l9,-10" fill="none" stroke="#0b1020" stroke-width="3" '
+        add(f'<circle cx="{x4 + w4 - 48}" cy="{y + 23}" r="13" fill="{TEAL}"/>')
+        add(f'<path d="M{x4 + w4 - 54},{y + 23} l4,5 l9,-10" fill="none" stroke="#0b1020" stroke-width="3" '
             f'stroke-linecap="round" stroke-linejoin="round"/>')
 # cache-aware badge
-cy = BOT - 84
-add(f'<rect x="{x4 + 22}" y="{cy}" width="{w4 - 44}" height="58" rx="13" fill="#0f1733" stroke="{AMBER}" stroke-opacity="0.55"/>')
+cy = BOT - 78
+add(f'<rect x="{x4 + 22}" y="{cy}" width="{w4 - 44}" height="56" rx="13" fill="#0f1733" stroke="{AMBER}" stroke-opacity="0.55"/>')
 add(f'<path d="M{x4 + 50},{cy + 21} a9,9 0 1,1 -2,9" fill="none" stroke="{AMBER}" stroke-width="2.4" stroke-linecap="round"/>')
 add(f'<path d="M{x4 + 44},{cy + 14} l4,8 l6,-6" fill="none" stroke="{AMBER}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>')
-text(x4 + 70, cy + 25, "cache-aware", 14, AMBER, 700)
-text(x4 + 70, cy + 44, "warm prompt cache costs less", 12, MUTED, 400)
+text(x4 + 70, cy + 24, "cache-aware", 14, AMBER, 700)
+text(x4 + 70, cy + 43, "warm prompt cache costs less", 12, MUTED, 400)
 
 # --- arrows between stages -------------------------------------------------------------
 arrow(x1 + w1 + 6, TOP + CH / 2 - 40, x2 - 12, TOP + CH / 2 - 40, -6)
 arrow(vx + 32, vy + 76, x3 - 10, TOP + 300, 10)
-arrow(x3 + w3 + 8, TOP + 300, x4 - 10, TOP + 252, -8)
+arrow(x3 + w3 + 8, TOP + 300, x4 - 10, TOP + 309, -6)
 
-text(W / 2, H - 30, "OpenAI · Anthropic · Open Responses · Gemini Interactions   ·   tiers small → xlarge   ·   "
-     "cache-aware   ·   Rust + llama.cpp", 14, FAINT, 500, "middle", extra='letter-spacing="0.3"')
+text(W / 2, H - 30, "OpenAI · Anthropic · Open Responses · Gemini Interactions   ·   "
+     "quality / speed / cost weights per request   ·   cache-aware", 14, FAINT, 500, "middle", extra='letter-spacing="0.3"')
 add("</svg>")
 OUT.write_text("\n".join(out))
 print(f"wrote {OUT} ({OUT.stat().st_size / 1024:.1f} KB)")

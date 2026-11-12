@@ -1,7 +1,7 @@
 # opas
 
 <p align="center">
-  <img src="docs/assets/opas-hero.svg" alt="opas: a request in any of four APIs goes through one prefill pass of Qwen3.5-9B; the hidden state of one layer feeds a linear probe that predicts success and cost per tier; opas routes to the tier with the best success minus λ·cost" width="100%">
+  <img src="docs/assets/opas-hero.svg" alt="opas: a request in any of four APIs goes through one prefill pass of Qwen3.5-9B; a linear probe on one layer predicts success, cost and response time for every model tier; opas picks the best option for the quality / speed / cost weights the client sets" width="100%">
 </p>
 
 An LLM router written in Rust. Clients send requests to opas in the API they already
@@ -12,7 +12,10 @@ can also return only the decision, or be used as a library.
   Open Responses (OpenAI Responses API) and Gemini Interactions. Responses stream through
   as-is, and errors come back in each API's own format.
 - **Generic tiers:** you describe your models as `small`, `medium`, `large` or `xlarge`
-  (Fable-class), with prices. The router reasons about tiers, not model names.
+  (Fable-class), with prices and speeds. The router reasons about tiers, not model names.
+- **You choose the balance:** for every candidate opas predicts the chance of success,
+  the cost and the response time. Clients weight quality, speed and cost per request
+  (default 60 / 20 / 20) and get all estimates back from `/v1/route`.
 - **Routing on model activations:** the probe router runs a local open-weights model
   (Qwen3.5-9B) over the request, without generating anything. A trained linear probe
   turns its hidden states into each tier's chance of success and expected output tokens.
@@ -51,7 +54,20 @@ For each request:
      - Cost = prompt tokens × input price + predicted output tokens × output price, using
        the candidate's `pricing` or its tier's defaults. For the model that served the
        previous turn, the cached part of the prompt is billed at the cached-input price.
-     - The router picks `argmax p̂ − λ·cost`.
+     - Response time = time to first token + output tokens ÷ output speed (the
+       candidate's `speed` or its tier's defaults): the total time to the complete
+       response.
+     - Each candidate gets three 0–1 scores:
+       - **quality** = `p̂`;
+       - **cost**: 1 for the cheapest, falling to 0 at 100× the cheapest (log scale);
+       - **speed**: 1 for the fastest, falling to 0 at 10× slower.
+     - They are combined with the request's **weights**. The default is quality 60 /
+       speed 20 / cost 20, as in OpenRouter's Router Index; set them per request with
+       `x-opas-weights: quality=…,speed=…,cost=…`, a preset (`x-opas-preference: quality`,
+       `balanced`, `cost` or `speed`), or `weights` / `preference` in `/v1/route`.
+     - The highest weighted score wins. Every candidate's estimates (success
+       probability, expected cost, expected response time and the scores) are returned
+       by `/v1/route`, so a client can also apply its own rule.
 5. **Forward.** The request goes to the chosen model's upstream for that API format,
    with the model name rewritten. The response streams back. For stateful APIs, the
    response id is recorded for step 2.
@@ -154,7 +170,7 @@ router_model = "auto"
 kind = "probe"                                      # or "random"
 encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"
 probe = "models/probes/llmrouterbench-qwen35-9b.json"
-lambda = 10.0                                       # success probability per USD
+weights = { quality = 60, speed = 20, cost = 20 }  # default balance; requests can override
 
 [cache]
 ttl_secs = 300                                      # provider prompt-cache lifetime
