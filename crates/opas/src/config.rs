@@ -133,7 +133,7 @@ pub enum RouterConfig {
     Probe {
         /// GGUF encoder model, e.g. `models/gguf/Qwen3.5-9B-Q8_0.gguf`.
         encoder_model: PathBuf,
-        /// Trained predictor, e.g. `probes/llmrouterbench-qwen35-9b.json`.
+        /// Trained predictor, e.g. `probes/predictor-model.json`.
         probe: PathBuf,
         /// Default quality / speed / cost weights; requests can override them.
         /// Defaults to quality 60 / speed 20 / cost 20.

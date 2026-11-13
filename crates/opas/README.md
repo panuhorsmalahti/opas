@@ -27,7 +27,7 @@ use opas::{ApiFormat, Candidate, RouteRequest, Router, Tier, Weights};
 
 let router = opas_encoder::ProbeRouter::load(
     "models/gguf/Qwen3.5-9B-Q8_0.gguf",
-    "probes/llmrouterbench-qwen35-9b.json",
+    "probes/predictor-model.json",
     Weights::default(),
     -1,
 )?;

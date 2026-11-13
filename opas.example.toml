@@ -11,8 +11,8 @@ router_model = "auto"
 # section opas is a plain proxy: requests must name a configured model.
 [router]
 kind = "probe"
-encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"   # download: see README "Run it"
-probe = "probes/llmrouterbench-qwen35-9b.json"        # included in the repo
+encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"   # the encoder model (scripts/install.sh downloads it)
+probe = "probes/predictor-model.json"        # the trained predictor (in the repo and every release)
 weights = { quality = 60, speed = 20, cost = 20 }     # default balance; requests override with x-opas-weights
 # n_gpu_layers = -1      # encoder layers on the GPU (-1 = all, 0 = CPU only)
 

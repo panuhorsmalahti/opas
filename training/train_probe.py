@@ -31,7 +31,7 @@ Steps:
      routing at equal cost, single tiers, a dataset-identity router and the oracle.
   4. Refit on all prompts, export the probe JSON and a markdown report.
 
-Usage: uv run train_probe.py [--out ../probes/llmrouterbench-qwen35-9b.json]
+Usage: uv run train_probe.py [--out ../probes/predictor-model.json]
 """
 
 from __future__ import annotations
@@ -260,7 +260,7 @@ def random_at_cost(frac, cost, target):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--acts", type=Path, default=DATA / "acts-9b")
-    ap.add_argument("--out", type=Path, default=ROOT / "probes" / "llmrouterbench-qwen35-9b.json")
+    ap.add_argument("--out", type=Path, default=ROOT / "probes" / "predictor-model.json")
     ap.add_argument("--report", type=Path, default=ROOT / "docs" / "probe-results.md")
     ap.add_argument("--layer-step", type=int, default=2, help="sweep every Nth captured layer")
     args = ap.parse_args()

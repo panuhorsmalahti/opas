@@ -75,7 +75,7 @@ config: |
   [router]
   kind = "probe"
   encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
-  probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"   # shipped in the image
+  probe = "/opt/opas/probes/predictor-model.json"   # shipped in the image
   weights = { quality = 60, speed = 20, cost = 20 }
 
   [[models]]

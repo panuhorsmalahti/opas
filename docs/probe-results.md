@@ -96,4 +96,4 @@ The router scores quality (p relative to the best candidate), cost (log scale, 0
 | cost | 20/10/70 | 0.497 | $0.01533 | 0.479 | 0.75/0.25/0.00 |
 | speed | 20/70/10 | 0.475 | $0.01429 | 0.475 | 1.00/0.00/0.00 |
 
-The exported probe (`probes/llmrouterbench-qwen35-9b.json`, committed to the repo) is refit on all 4157 prompts. The xlarge head is not evaluated: the benchmark has no model of that class.
+The exported probe (`probes/predictor-model.json`, committed to the repo) is refit on all 4157 prompts. The xlarge head is not evaluated: the benchmark has no model of that class.

@@ -31,7 +31,7 @@ use serde_json::json;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let router = ProbeRouter::load(
         "models/gguf/Qwen3.5-9B-Q8_0.gguf",          // encoder model
-        "probes/llmrouterbench-qwen35-9b.json",      // predictor, included in the repo
+        "probes/predictor-model.json",      // predictor, included in the repo
         Weights::default(),                          // quality 60 / speed 20 / cost 20
         -1,                                          // encoder layers on the GPU (-1 = all)
     )?;
