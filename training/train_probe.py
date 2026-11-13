@@ -18,8 +18,10 @@ regression); its token target is their mean output tokens. No benchmark model is
 "xlarge" (Fable) class, so that head is extrapolated one step beyond large:
 xlarge = large + (large − medium) in log-odds, with large's token head.
 
-Each head is standardize -> PCA(100) -> logistic / ridge, collapsed into one weight vector
-over h (every step is linear), which is what the Rust ProbeRouter loads.
+Each head is standardize -> logistic / ridge on all hidden dimensions, collapsed into one
+weight vector over h (every step is linear), which is what the Rust ProbeRouter loads.
+(Earlier probes reduced h to 100 PCA dimensions first; predictor_capacity.py compares
+the two: using every dimension ranks difficulty better, at the same runtime cost.)
 
 Steps:
   1. Split prompts 80/20, stratified by dataset (seeded).
@@ -51,7 +53,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data" / "llmrouterbench"
-PCA_DIM = 100
+PCA_DIM = None  # None: no PCA, use every hidden dimension
 SEED = 0
 TRAINED_TIERS = ["small", "medium", "large"]
 
@@ -118,7 +120,7 @@ def fit_weighted_logistic(F, frac, C):
 
 
 class TierProbe:
-    """standardize -> PCA -> per-tier logistic (success) and ridge (log tokens)."""
+    """standardize -> optional PCA -> per-tier logistic (success) and ridge (log tokens)."""
 
     def __init__(self, pca_dim=PCA_DIM, C=0.1, alpha=10.0, sparse=False):
         self.pca_dim, self.C, self.alpha, self.sparse = pca_dim, C, alpha, sparse
@@ -126,14 +128,17 @@ class TierProbe:
     def features(self, X):
         if self.sparse:
             return X
-        return self.pca.transform(self.scaler.transform(X))
+        Z = self.scaler.transform(X)
+        return self.pca.transform(Z) if self.pca is not None else Z
 
     def fit(self, X, frac, tokens):
         if not self.sparse:
             self.scaler = StandardScaler().fit(X)
             Z = self.scaler.transform(X)
-            k = min(self.pca_dim, Z.shape[0] - 1, Z.shape[1])
-            self.pca = PCA(n_components=k, random_state=SEED).fit(Z)
+            self.pca = None
+            if self.pca_dim is not None:
+                k = min(self.pca_dim, Z.shape[0] - 1, Z.shape[1])
+                self.pca = PCA(n_components=k, random_state=SEED).fit(Z)
         F = self.features(X)
         self.succ = [fit_weighted_logistic(F, frac[:, t], self.C) for t in range(frac.shape[1])]
         self.tok = [Ridge(alpha=self.alpha).fit(F, np.log1p(tokens[:, t])) for t in range(frac.shape[1])]
@@ -146,11 +151,14 @@ class TierProbe:
         return p, np.maximum(k, 0)
 
     def collapse(self, model):
-        """A fitted linear model on PCA features as (w, b) over the raw features."""
+        """A fitted linear model on (PCA-reduced) standardized features as (w, b) over the
+        raw features."""
         mu, sd = self.scaler.mean_, self.scaler.scale_
-        P, pm = self.pca.components_, self.pca.mean_
         coef = np.ravel(model.coef_)
         intercept = float(np.ravel([model.intercept_])[0])
+        if self.pca is None:
+            return coef / sd, intercept - float((mu / sd) @ coef)
+        P, pm = self.pca.components_, self.pca.mean_
         v = P.T @ coef
         return v / sd, intercept - float((mu / sd + pm) @ v)
 
@@ -182,7 +190,7 @@ def token_spearman(true, pred):
     return float(np.mean([spearmanr(true[:, t], pred[:, t]).statistic for t in range(true.shape[1])]))
 
 
-def cv_score(fx, idx, frac, tokens, member_success, datasets, C=0.1, alpha=10.0, sparse=False, pca_dim=PCA_DIM):
+def cv_score(fx, idx, frac, tokens, member_success, datasets, C=0.003, alpha=1000.0, sparse=False, pca_dim=PCA_DIM):
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
     P = np.zeros((len(idx), frac.shape[1]))
     K = np.zeros_like(P)
@@ -285,7 +293,7 @@ def main():
     results = {}
     for name, (fx, sparse) in baselines.items():
         results[name] = cv_score(fx, idx_train, frac, tokens, member_success, datasets,
-                                 C=1.0, alpha=1.0, sparse=sparse, pca_dim=10**6)
+                                 C=1.0, alpha=1.0, sparse=sparse, pca_dim=None)
         print(f"baseline {name:<20} AUROC {results[name][0]:.3f}  within-dataset {results[name][1]:.3f}  tokens rho {results[name][2]:.3f}", flush=True)
 
     # Activation sweep.
@@ -302,13 +310,13 @@ def main():
     arr_best = last if best_pool == "last" else mean
     fx_best = lambda ix: np.asarray(arr_best[ix, k_best, :], dtype=np.float32)
     grid = []
-    for C in (0.01, 0.03, 0.1, 0.3, 1.0):
+    for C in (0.0003, 0.001, 0.003, 0.01, 0.03):
         r = cv_score(fx_best, idx_train, frac, tokens, member_success, datasets, C=C)
         grid.append((C, *r))
         print(f"C={C:<5} AUROC {r[0]:.3f}  within-dataset {r[1]:.3f}", flush=True)
     best_C = max(grid, key=lambda t: t[2])[0]
     alpha_grid = [(a, cv_score(fx_best, idx_train, frac, tokens, member_success, datasets, C=best_C, alpha=a)[2])
-                  for a in (1.0, 10.0, 100.0, 1000.0)]
+                  for a in (100.0, 1000.0, 10000.0, 100000.0)]
     best_alpha = max(alpha_grid, key=lambda t: t[1])[0]
     print(f"chosen: layer {best_layer} {best_pool}, C={best_C}, alpha={best_alpha}")
 
@@ -323,7 +331,7 @@ def main():
     }
     print("test:", {k: round(v, 3) for k, v in test.items()})
 
-    ds_probe = TierProbe(pca_dim=10**6, C=1.0, alpha=1.0)
+    ds_probe = TierProbe(pca_dim=None, C=1.0, alpha=1.0)
     Xd = ohe.transform(datasets.reshape(-1, 1)).toarray()
     ds_probe.fit(Xd[idx_train], frac[idx_train], tokens[idx_train])
     p_ds, k_ds = ds_probe.predict(Xd[idx_test])
@@ -401,7 +409,7 @@ def main():
             "tiers": tiers,
             "label": "tier success = fraction of the tier's models with score >= 0.5; tokens = their mean output tokens",
             "xlarge": "extrapolated: large + (large - medium) in log-odds; large's token head",
-            "pipeline": f"standardize -> PCA({PCA_DIM}) -> weighted logistic(C={best_C}) / ridge(alpha={best_alpha}) on log1p(tokens), collapsed",
+            "pipeline": f"standardize -> weighted logistic(C={best_C}) / ridge(alpha={best_alpha}) on log1p(tokens), collapsed",
             "heldout_test": test,
         },
     }

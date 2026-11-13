@@ -7,16 +7,16 @@ Only the success predictor changes between rows. Each family's settings (regular
 - **Learned parameters:** numbers fitted to the success labels (PCA is fitted without labels and not counted).
 - **AUROC:** tier prediction vs. each member model's success. **Within:** the same inside each benchmark, averaged; ranking difficulty beyond recognizing the benchmark.
 - **Train − test gap:** within-benchmark AUROC on the training data minus on the test data; large gaps mean memorization.
-- **Routing:** opas's weighted scoring on the test split (token predictions are the shipped ridge heads for every row). *Random* is random routing at the same mean cost.
+- **Routing:** opas's weighted scoring on the test split (token predictions are the previous probe's ridge heads for every row). *Random* is random routing at the same mean cost.
 
 | Predictor | Learned parameters | CV within | Test AUROC | Test within | Train − test gap | Balanced: success @ cost (random) | Quality: success @ cost |
 |---|---|---|---|---|---|---|---|
 | linear, PCA 16 | 51 | 0.630 | 0.832 | 0.645 | -0.004 | 0.545 @ $0.0242 (0.511) | 0.572 @ $0.0397 |
 | linear, PCA 32 | 99 | 0.648 | 0.840 | 0.673 | -0.008 | 0.550 @ $0.0242 (0.511) | 0.577 @ $0.0380 |
-| linear, PCA 100 (shipped) | 303 | 0.672 | 0.844 | 0.675 | +0.030 | 0.545 @ $0.0234 (0.508) | 0.570 @ $0.0360 |
+| linear, PCA 100 (previous probe) | 303 | 0.672 | 0.844 | 0.675 | +0.030 | 0.545 @ $0.0234 (0.508) | 0.570 @ $0.0360 |
 | linear, PCA 256 | 771 | 0.677 | 0.846 | 0.680 | +0.050 | 0.547 @ $0.0236 (0.509) | 0.579 @ $0.0353 |
 | linear, PCA 1024 | 3,075 | 0.680 | 0.849 | 0.692 | +0.092 | 0.547 @ $0.0240 (0.510) | 0.579 @ $0.0346 |
-| linear, all 4096 dims | 12,291 | 0.681 | 0.849 | 0.694 | +0.107 | 0.547 @ $0.0238 (0.510) | 0.577 @ $0.0345 |
+| linear, all 4096 dims (shipped) | 12,291 | 0.681 | 0.849 | 0.694 | +0.107 | 0.547 @ $0.0238 (0.510) | 0.577 @ $0.0345 |
 | MLP 64, PCA 100 | 6,659 | 0.673 | 0.845 | 0.684 | +0.065 | 0.542 @ $0.0229 (0.507) | 0.572 @ $0.0325 |
 | MLP 256, PCA 100 | 26,627 | 0.670 | 0.843 | 0.669 | +0.060 | 0.546 @ $0.0237 (0.509) | 0.570 @ $0.0324 |
 | MLP 256x256, PCA 100 | 92,419 | 0.670 | 0.845 | 0.690 | +0.022 | 0.550 @ $0.0242 (0.511) | 0.572 @ $0.0396 |
@@ -24,17 +24,17 @@ Only the success predictor changes between rows. Each family's settings (regular
 | MLP 1024x256, all 4096 dims | 4,458,499 | 0.666 | 0.847 | 0.696 | +0.042 | 0.539 @ $0.0231 (0.507) | 0.573 @ $0.0409 |
 | boosted trees, PCA 100 | 14,400 | 0.656 | 0.844 | 0.677 | +0.146 | 0.545 @ $0.0232 (0.507) | 0.569 @ $0.0346 |
 
-## Compared with the shipped probe
+## Compared with the previous probe (PCA 100)
 
-Difference from the shipped probe on the test split, with 95% intervals from a paired bootstrap over the 832 test prompts (300 resamples). An interval that contains 0 means the test split cannot tell the two apart.
+Difference from the previous probe (PCA 100) on the test split, with 95% intervals from a paired bootstrap over the 832 test prompts (300 resamples). An interval that contains 0 means the test split cannot tell the two apart.
 
-| Predictor | Learned parameters | Test within − shipped | Balanced success − shipped |
+| Predictor | Learned parameters | Test within − previous | Balanced success − previous |
 |---|---|---|---|
 | linear, PCA 16 | 51 | -0.031 [-0.054, -0.004] | +0.000 [-0.006, +0.006] |
 | linear, PCA 32 | 99 | -0.002 [-0.023, +0.018] | +0.005 [+0.000, +0.010] |
 | linear, PCA 256 | 771 | +0.005 [-0.005, +0.015] | +0.002 [-0.004, +0.008] |
 | linear, PCA 1024 | 3,075 | +0.017 [+0.006, +0.030] | +0.002 [-0.004, +0.009] |
-| linear, all 4096 dims | 12,291 | +0.018 [+0.006, +0.031] | +0.002 [-0.005, +0.009] |
+| linear, all 4096 dims (shipped) | 12,291 | +0.018 [+0.006, +0.031] | +0.002 [-0.005, +0.009] |
 | MLP 64, PCA 100 | 6,659 | +0.009 [-0.003, +0.022] | -0.003 [-0.010, +0.004] |
 | MLP 256, PCA 100 | 26,627 | -0.007 [-0.020, +0.006] | +0.001 [-0.008, +0.009] |
 | MLP 256x256, PCA 100 | 92,419 | +0.015 [+0.003, +0.027] | +0.006 [-0.001, +0.011] |
@@ -50,11 +50,11 @@ Test within-benchmark AUROC when training on a stratified subsample of the train
 
 | Predictor | 416 prompts | 831 prompts | 1662 prompts | 3325 prompts |
 |---|---|---|---|---|
-| linear, PCA 100 (shipped) | 0.644 | 0.660 | 0.673 | 0.675 |
-| linear, all 4096 dims | 0.649 | 0.670 | 0.682 | 0.694 |
+| linear, PCA 100 (previous probe) | 0.644 | 0.660 | 0.673 | 0.675 |
+| linear, all 4096 dims (shipped) | 0.649 | 0.670 | 0.682 | 0.694 |
 | MLP 256, PCA 100 | 0.630 | 0.656 | 0.673 | 0.669 |
 | MLP 1024x256, all 4096 dims | 0.627 | 0.662 | 0.676 | 0.696 |
 
-Chosen settings: linear, PCA 16: {'C': 1.0}; linear, PCA 32: {'C': 0.1}; linear, PCA 100 (shipped): {'C': 0.01}; linear, PCA 256: {'C': 0.003}; linear, PCA 1024: {'C': 0.003}; linear, all 4096 dims: {'C': 0.003}; MLP 64, PCA 100: {'hidden': (64,), 'alpha': 10.0}; MLP 256, PCA 100: {'hidden': (256,), 'alpha': 30.0}; MLP 256x256, PCA 100: {'hidden': (256, 256), 'alpha': 10.0}; MLP 512, all 4096 dims: {'hidden': (512,), 'alpha': 100.0}; MLP 1024x256, all 4096 dims: {'hidden': (1024, 256), 'alpha': 10.0}; boosted trees, PCA 100: {'depth': 4, 'l2': 10.0}.
+Chosen settings: linear, PCA 16: {'C': 1.0}; linear, PCA 32: {'C': 0.1}; linear, PCA 100 (previous probe): {'C': 0.01}; linear, PCA 256: {'C': 0.003}; linear, PCA 1024: {'C': 0.003}; linear, all 4096 dims (shipped): {'C': 0.003}; MLP 64, PCA 100: {'hidden': (64,), 'alpha': 10.0}; MLP 256, PCA 100: {'hidden': (256,), 'alpha': 30.0}; MLP 256x256, PCA 100: {'hidden': (256, 256), 'alpha': 10.0}; MLP 512, all 4096 dims: {'hidden': (512,), 'alpha': 100.0}; MLP 1024x256, all 4096 dims: {'hidden': (1024, 256), 'alpha': 10.0}; boosted trees, PCA 100: {'depth': 4, 'l2': 10.0}.
 
-Search ranges: linear, PCA 16: {'C': 0.01}, {'C': 0.1}, {'C': 1.0}; linear, PCA 32: {'C': 0.01}, {'C': 0.1}, {'C': 1.0}; linear, PCA 100 (shipped): {'C': 0.003}, {'C': 0.01}, {'C': 0.03}, {'C': 0.1}; linear, PCA 256: {'C': 0.001}, {'C': 0.003}, {'C': 0.01}, {'C': 0.03}; linear, PCA 1024: {'C': 0.0003}, {'C': 0.001}, {'C': 0.003}, {'C': 0.01}, {'C': 0.03}; linear, all 4096 dims: {'C': 0.0001}, {'C': 0.0003}, {'C': 0.001}, {'C': 0.003}, {'C': 0.01}, {'C': 0.03}; MLP 64, PCA 100: {'hidden': (64,), 'alpha': 0.1}, {'hidden': (64,), 'alpha': 1.0}, {'hidden': (64,), 'alpha': 10.0}, {'hidden': (64,), 'alpha': 30.0}, {'hidden': (64,), 'alpha': 100.0}; MLP 256, PCA 100: {'hidden': (256,), 'alpha': 0.1}, {'hidden': (256,), 'alpha': 1.0}, {'hidden': (256,), 'alpha': 10.0}, {'hidden': (256,), 'alpha': 30.0}, {'hidden': (256,), 'alpha': 100.0}; MLP 256x256, PCA 100: {'hidden': (256, 256), 'alpha': 0.1}, {'hidden': (256, 256), 'alpha': 1.0}, {'hidden': (256, 256), 'alpha': 10.0}, {'hidden': (256, 256), 'alpha': 30.0}, {'hidden': (256, 256), 'alpha': 100.0}; MLP 512, all 4096 dims: {'hidden': (512,), 'alpha': 1.0}, {'hidden': (512,), 'alpha': 10.0}, {'hidden': (512,), 'alpha': 100.0}; MLP 1024x256, all 4096 dims: {'hidden': (1024, 256), 'alpha': 1.0}, {'hidden': (1024, 256), 'alpha': 10.0}, {'hidden': (1024, 256), 'alpha': 100.0}; boosted trees, PCA 100: {'depth': 2, 'l2': 0.0}, {'depth': 2, 'l2': 10.0}, {'depth': 4, 'l2': 0.0}, {'depth': 4, 'l2': 10.0}.
+Search ranges: linear, PCA 16: {'C': 0.01}, {'C': 0.1}, {'C': 1.0}; linear, PCA 32: {'C': 0.01}, {'C': 0.1}, {'C': 1.0}; linear, PCA 100 (previous probe): {'C': 0.003}, {'C': 0.01}, {'C': 0.03}, {'C': 0.1}; linear, PCA 256: {'C': 0.001}, {'C': 0.003}, {'C': 0.01}, {'C': 0.03}; linear, PCA 1024: {'C': 0.0003}, {'C': 0.001}, {'C': 0.003}, {'C': 0.01}, {'C': 0.03}; linear, all 4096 dims (shipped): {'C': 0.0001}, {'C': 0.0003}, {'C': 0.001}, {'C': 0.003}, {'C': 0.01}, {'C': 0.03}; MLP 64, PCA 100: {'hidden': (64,), 'alpha': 0.1}, {'hidden': (64,), 'alpha': 1.0}, {'hidden': (64,), 'alpha': 10.0}, {'hidden': (64,), 'alpha': 30.0}, {'hidden': (64,), 'alpha': 100.0}; MLP 256, PCA 100: {'hidden': (256,), 'alpha': 0.1}, {'hidden': (256,), 'alpha': 1.0}, {'hidden': (256,), 'alpha': 10.0}, {'hidden': (256,), 'alpha': 30.0}, {'hidden': (256,), 'alpha': 100.0}; MLP 256x256, PCA 100: {'hidden': (256, 256), 'alpha': 0.1}, {'hidden': (256, 256), 'alpha': 1.0}, {'hidden': (256, 256), 'alpha': 10.0}, {'hidden': (256, 256), 'alpha': 30.0}, {'hidden': (256, 256), 'alpha': 100.0}; MLP 512, all 4096 dims: {'hidden': (512,), 'alpha': 1.0}, {'hidden': (512,), 'alpha': 10.0}, {'hidden': (512,), 'alpha': 100.0}; MLP 1024x256, all 4096 dims: {'hidden': (1024, 256), 'alpha': 1.0}, {'hidden': (1024, 256), 'alpha': 10.0}, {'hidden': (1024, 256), 'alpha': 100.0}; boosted trees, PCA 100: {'depth': 2, 'l2': 0.0}, {'depth': 2, 'l2': 10.0}, {'depth': 4, 'l2': 0.0}, {'depth': 4, 'l2': 10.0}.

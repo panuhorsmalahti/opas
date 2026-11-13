@@ -237,25 +237,26 @@ uv run predictor_capacity.py
 | Router | Success | Mean cost / request |
 |---|---|---|
 | always small / medium / large | 0.475 / 0.517 / 0.574 | $0.014 / $0.018 / $0.042 |
-| opas, `quality` preset (100/0/0) | 0.570 | $0.036 |
-| opas, default `balanced` (60/20/20) | 0.545 | $0.023 |
-| random routing at the same $0.023 | 0.508 | $0.023 |
+| opas, `quality` preset (100/0/0) | 0.577 | $0.034 |
+| opas, default `balanced` (60/20/20) | 0.548 | $0.024 |
+| random routing at the same $0.024 | 0.509 | $0.024 |
 | oracle (best tier per prompt) | 0.640 | $0.021 |
 
 - **What works:** with the default weights, opas beats random routing at the same cost
-  by 3.7 points, and comes within 3 points of always using the large tier at 56% of
-  its cost.
+  by 3.9 points, and comes within 2.6 points of always using the large tier at 57% of
+  its cost. The `quality` preset matches always-large at 83% of its cost.
 - **What doesn't (yet):** on this benchmark, a TF-IDF bag-of-words router does about as
   well as the activation probe (within a point at every cost level). Most of the
   signal is which kind of task a prompt is. The probe is better at ranking difficulty
-  *within* a benchmark (cross-validated AUROC 0.672 vs 0.576 for TF-IDF), but that gain is small in
+  *within* a benchmark (cross-validated AUROC 0.681 vs 0.576 for TF-IDF), but that gain is small in
   routing terms here.
 - **Predictor size** ([docs/predictor-capacity.md](docs/predictor-capacity.md)): on the
   same data, predictors from 51 to 4.5 million learned parameters (linear models, MLPs,
   boosted trees) differ by at most 0.006 in routed success, and no difference is
   distinguishable from noise. In ranking difficulty, a linear model on all 4096
-  activation dimensions is slightly better than the shipped 100-dimension one (+0.018
-  within-benchmark AUROC); a 4.5M-parameter MLP adds nothing beyond that.
+  activation dimensions beats one on 100 PCA dimensions (+0.018 within-benchmark
+  AUROC), and a 4.5M-parameter MLP adds nothing beyond that. The shipped predictor is
+  therefore linear on all 4096 dimensions: about 4,100 learned numbers per head.
 - **Limits:** the tiers are open models from 2025 rather than the Claude models in the
   example config; the xlarge head is extrapolated; speed scores use tier-default speeds.
 

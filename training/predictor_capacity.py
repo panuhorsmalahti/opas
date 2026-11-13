@@ -130,10 +130,10 @@ def families():
     return {
         "linear, PCA 16": [Linear(16, C) for C in (0.01, 0.1, 1.0)],
         "linear, PCA 32": [Linear(32, C) for C in (0.01, 0.1, 1.0)],
-        "linear, PCA 100 (shipped)": [Linear(100, C) for C in (0.003, 0.01, 0.03, 0.1)],
+        "linear, PCA 100 (previous probe)": [Linear(100, C) for C in (0.003, 0.01, 0.03, 0.1)],
         "linear, PCA 256": [Linear(256, C) for C in (0.001, 0.003, 0.01, 0.03)],
         "linear, PCA 1024": [Linear(1024, C) for C in (0.0003, 0.001, 0.003, 0.01, 0.03)],
-        "linear, all 4096 dims": [Linear(None, C) for C in (0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03)],
+        "linear, all 4096 dims (shipped)": [Linear(None, C) for C in (0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03)],
         "MLP 64, PCA 100": [MLP(100, (64,), a) for a in (0.1, 1.0, 10.0, 30.0, 100.0)],
         "MLP 256, PCA 100": [MLP(100, (256,), a) for a in (0.1, 1.0, 10.0, 30.0, 100.0)],
         "MLP 256x256, PCA 100": [MLP(100, (256, 256), a) for a in (0.1, 1.0, 10.0, 30.0, 100.0)],
@@ -173,9 +173,9 @@ def main():
     folds = list(StratifiedKFold(5, shuffle=True, random_state=SEED).split(idx_train, datasets[idx_train]))
     price = cost[idx_train].sum(0) / np.maximum(tokens[idx_train].sum(0), 1)
 
-    # Token predictions for routing are the shipped linear ridge heads for every row, so
+    # Token predictions for routing are the previous probe's ridge heads (PCA 100) for every row, so
     # only the success predictor differs between rows.
-    tok = TierProbe(C=0.01, alpha=1000.0).fit(X[idx_train], frac[idx_train], tokens[idx_train])
+    tok = TierProbe(pca_dim=100, C=0.01, alpha=1000.0).fit(X[idx_train], frac[idx_train], tokens[idx_train])
     _, k_te = tok.predict(X[idx_test])
 
     rows = []
@@ -210,8 +210,8 @@ def main():
               f"within {row['test_within']:.3f}  train within {row['train_within']:.3f}  "
               f"balanced {succ:.3f}@${c:.4f}  ({row['seconds']:.0f}s) {row['config']}", flush=True)
 
-    # Paired bootstrap over test prompts: each predictor minus the shipped one.
-    ship = next((r for r in rows if r["family"].endswith("(shipped)")), None)
+    # Paired bootstrap over test prompts: each predictor minus the previous probe (PCA 100).
+    ship = next((r for r in rows if r["family"].endswith("(previous probe)")), None)
     if ship is not None:
         rng = np.random.default_rng(SEED)
         te_ds = datasets[idx_test]
@@ -238,7 +238,7 @@ def main():
     # trained on a stratified subsample of the training split, evaluated on the test split.
     curve = []
     by_name = {r["family"]: r for r in rows}
-    curve_fams = [f for f in ("linear, PCA 100 (shipped)", "linear, all 4096 dims", "MLP 256, PCA 100",
+    curve_fams = [f for f in ("linear, PCA 100 (previous probe)", "linear, all 4096 dims (shipped)", "MLP 256, PCA 100",
                               "MLP 1024x256, all 4096 dims") if f in by_name]
     for f in curve_fams:
         cfg_cls = type(fams[f][0])
@@ -281,7 +281,7 @@ def write_report(path, n, d, idx_train, idx_test, frac, cost, rows, curve):
         "each benchmark, averaged; ranking difficulty beyond recognizing the benchmark.",
         "- **Train − test gap:** within-benchmark AUROC on the training data minus on the test data; "
         "large gaps mean memorization.",
-        "- **Routing:** opas's weighted scoring on the test split (token predictions are the shipped "
+        "- **Routing:** opas's weighted scoring on the test split (token predictions are the previous probe's "
         "ridge heads for every row). *Random* is random routing at the same mean cost.",
         "",
         "| Predictor | Learned parameters | CV within | Test AUROC | Test within | Train − test gap | "
@@ -293,13 +293,13 @@ def write_report(path, n, d, idx_train, idx_test, frac, cost, rows, curve):
         L.append(f"| {r['family']} | {r['params']:,} | {r['cv_within']:.3f} | {r['test_auroc']:.3f} | "
                  f"{r['test_within']:.3f} | {r['train_within'] - r['test_within']:+.3f} | "
                  f"{b[0]:.3f} @ ${b[1]:.4f} ({b[2]:.3f}) | {q[0]:.3f} @ ${q[1]:.4f} |")
-    ship = next((r for r in rows if r["family"].endswith("(shipped)")), None)
+    ship = next((r for r in rows if r["family"].endswith("(previous probe)")), None)
     if ship is not None and any("ci_within" in r for r in rows):
-        L += ["", "## Compared with the shipped probe", "",
-              f"Difference from the shipped probe on the test split, with 95% intervals from a paired bootstrap "
+        L += ["", "## Compared with the previous probe (PCA 100)", "",
+              f"Difference from the previous probe (PCA 100) on the test split, with 95% intervals from a paired bootstrap "
               f"over the {len(idx_test)} test prompts ({BOOTSTRAP} resamples). An interval that contains 0 "
               "means the test split cannot tell the two apart.", "",
-              "| Predictor | Learned parameters | Test within − shipped | Balanced success − shipped |",
+              "| Predictor | Learned parameters | Test within − previous | Balanced success − previous |",
               "|---|---|---|---|"]
         for r in rows:
             if "ci_within" not in r:
