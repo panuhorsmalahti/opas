@@ -512,7 +512,7 @@ async fn route_endpoint_reports_the_continued_conversation() {
     let first = json_body(&body)["model"].as_str().unwrap().to_owned();
     assert!(json_body(&body)
         .get("conversation")
-        .map_or(true, Value::is_null));
+        .is_none_or(Value::is_null));
 
     let turn2 = json!({"model": "auto", "messages": [
         {"role": "user", "content": "hello"},

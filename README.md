@@ -87,20 +87,35 @@ Default tier prices (USD per million tokens) are used when a model has no `prici
 ## Quick start
 
 ```sh
-# The encoder model (9.5 GB, not in the repo). The trained predictor is in probes/.
-mkdir -p models/gguf
-curl -L -o models/gguf/Qwen3.5-9B-Q8_0.gguf \
-  https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf
-
-cp opas.example.toml opas.toml
+curl -fsSL https://raw.githubusercontent.com/panuhorsmalahti/opas/main/scripts/install.sh | sh
 export ANTHROPIC_API_KEY=...
-cargo run --release -p opas-server -- --config opas.toml
+opas
 ```
 
-The first build compiles llama.cpp for the probe router, which needs cmake
-(`brew install cmake` or `apt install cmake clang libclang-dev`). Without it,
-`cargo build -p opas-server --no-default-features` builds a plain proxy with no router:
-requests must name a configured model.
+The installer (macOS on Apple Silicon, Linux x86_64 / arm64):
+
+- puts `opas` and `opas-encode` in `~/.local/bin`, from the latest
+  [release](https://github.com/panuhorsmalahti/opas/releases), after checking the checksum;
+- puts the trained predictor in `~/.local/share/opas/probes/`;
+- downloads the encoder model (Qwen3.5-9B Q8_0, 9.5 GB) to `~/.local/share/opas/models/`,
+  resuming if interrupted;
+- writes `~/.config/opas/opas.toml` (routing between Claude Opus and Haiku) unless one
+  exists.
+
+`opas` reads `./opas.toml` if present, otherwise `~/.config/opas/opas.toml`. The script's
+header lists its options (version, directories, skipping the model).
+
+**From source:**
+
+```sh
+cargo install --locked --git https://github.com/panuhorsmalahti/opas opas-server
+```
+
+This compiles llama.cpp, which needs cmake (`brew install cmake` or
+`apt install cmake clang libclang-dev`). With `--no-default-features` you get a plain
+proxy without the router and without llama.cpp. For the encoder model and a config,
+run the installer as well, with `OPAS_BIN_DIR` set to a scratch directory so it leaves
+your build in place.
 
 Point an SDK at it (base URL `http://127.0.0.1:8080/v1`, or `http://127.0.0.1:8080` for
 Anthropic SDKs), or call it directly:
@@ -179,7 +194,7 @@ router_model = "auto"
 [router]
 kind = "probe"                                      # leave out [router] for a plain proxy
 encoder_model = "models/gguf/Qwen3.5-9B-Q8_0.gguf"
-probe = "probes/llmrouterbench-qwen35-9b.json"    # included in the repo
+probe = "probes/predictor-model.json"    # included in the repo
 weights = { quality = 60, speed = 20, cost = 20 }  # default balance; requests can override
 
 [cache]
@@ -193,82 +208,14 @@ anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPI
 # also: openai = {...}, responses = {...}, interactions = {...}
 ```
 
-## Training the probe
-
-Training is offline. The router only loads the exported probe file. Model weights and
-datasets go in `models/` and `data/`, which git ignores.
-
-```sh
-# 1. Encoder model (9.5 GB) and LLMRouterBench (1.3 GB)
-mkdir -p models/gguf
-curl -L -o models/gguf/Qwen3.5-9B-Q8_0.gguf \
-  https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf
-./scripts/download-llmrouterbench.sh
-
-# 2. Labels (per prompt and model: score, cost, output tokens) and a stratified sample
-cd training && uv run prepare_llmrouterbench.py && cd ..
-
-# 3. Activations for the sample (Rust encoder; every layer, last-token and mean pooling)
-cargo build --release -p opas-encoder
-./target/release/opas-encode --input data/llmrouterbench/sample.jsonl \
-  --out data/llmrouterbench/acts-9b --max-tokens 1024
-
-# 4. Train, evaluate, export probes/llmrouterbench-qwen35-9b.json and docs/probe-results.md
-cd training && uv run train_probe.py
-
-# Optional: compare predictor sizes and types (docs/predictor-capacity.md, ~30 min)
-uv run predictor_capacity.py
-```
-
-**What training does:**
-
-- **Tiers:** the 13 LLMRouterBench models are ranked by overall success and split into
-  small, medium and large thirds. The xlarge (Fable-class) head is extrapolated one step
-  beyond large, because no benchmark model is in that class.
-- **Model selection:** the layer, pooling and regularization are chosen by 5-fold
-  cross-validation, scored by *within-benchmark* AUROC, so the probe is rewarded for
-  ranking difficulty rather than for recognizing which benchmark a prompt came from.
-- **Evaluation:** a held-out split compares probe routing against random routing at the
-  same cost, single tiers, a benchmark-identity router and the oracle.
-
-**Results** on the held-out split (832 prompts; full report in
-[docs/probe-results.md](docs/probe-results.md)):
-
-| Router | Success | Mean cost / request |
-|---|---|---|
-| always small / medium / large | 0.475 / 0.517 / 0.574 | $0.014 / $0.018 / $0.042 |
-| opas, `quality` preset (100/0/0) | 0.577 | $0.034 |
-| opas, default `balanced` (60/20/20) | 0.548 | $0.024 |
-| random routing at the same $0.024 | 0.509 | $0.024 |
-| oracle (best tier per prompt) | 0.640 | $0.021 |
-
-- **What works:** with the default weights, opas beats random routing at the same cost
-  by 3.9 points, and comes within 2.6 points of always using the large tier at 57% of
-  its cost. The `quality` preset matches always-large at 83% of its cost.
-- **What doesn't (yet):** on this benchmark, a TF-IDF bag-of-words router does about as
-  well as the activation probe (within a point at every cost level). Most of the
-  signal is which kind of task a prompt is. The probe is better at ranking difficulty
-  *within* a benchmark (cross-validated AUROC 0.681 vs 0.576 for TF-IDF), but that gain is small in
-  routing terms here.
-- **Predictor size** ([docs/predictor-capacity.md](docs/predictor-capacity.md)): on the
-  same data, predictors from 51 to 4.5 million learned parameters (linear models, MLPs,
-  boosted trees) differ by at most 0.006 in routed success, and no difference is
-  distinguishable from noise. In ranking difficulty, a linear model on all 4096
-  activation dimensions beats one on 100 PCA dimensions (+0.018 within-benchmark
-  AUROC), and a 4.5M-parameter MLP adds nothing beyond that. The shipped predictor is
-  therefore linear on all 4096 dimensions: about 4,100 learned numbers per head.
-- **Limits:** the tiers are open models from 2025 rather than the Claude models in the
-  example config; the xlarge head is extrapolated; speed scores use tier-default speeds.
-
-`training/reference/` holds a Python (MLX) reimplementation of the encoder, used to
-cross-check the Rust encoder; see its README.
-
 ## Deployment
 
 Step-by-step guides live in [docs/usage](docs/README.md): [HTTP API](docs/usage/api.md),
 [Rust SDK](docs/usage/sdk.md), [Docker](docs/usage/docker.md),
 [Kubernetes](docs/usage/kubernetes.md), [Helm](docs/usage/helm.md) and
-[hardware](docs/usage/hardware.md).
+[hardware](docs/usage/hardware.md). How the predictor was trained and how well it routes:
+[docs/training.md](docs/training.md). Building and testing:
+[docs/development.md](docs/development.md).
 
 **Docker:**
 
@@ -311,41 +258,6 @@ an init container fetches them.
 
 Cache-aware routing and affinity state are kept in memory in each pod, so the Service uses
 `ClientIP` session affinity.
-
-**CI:** `.github/workflows/ci.yml` runs on every push and PR:
-
-- format and strict clippy;
-- tests on Linux and macOS (Metal);
-- a build without llama.cpp;
-- the training tools;
-- Helm and Kustomize rendering;
-- a Docker build.
-
-- `image.yml` publishes multi-arch images to GHCR on pushes to `main` and on `v*` tags.
-- `release.yml` builds `opas` and `opas-encode` for Linux (x86_64, arm64) and macOS
-  (Apple Silicon) on `v*` tags, and publishes them with the trained predictor as a
-  GitHub Release. To release, bump `version` in `Cargo.toml` and the Helm chart, then
-  push a tag: `git tag v0.2.0 && git push origin v0.2.0`.
-
-## Layout
-
-| Path | What |
-|---|---|
-| `crates/opas` | Library / SDK: request parsing for four APIs, `Router` trait, tiers, cache-aware conversation tracking, config, gateway |
-| `crates/opas-server` | The `opas` HTTP server |
-| `crates/opas-encoder` | In-process llama.cpp encoder, probe format, `ProbeRouter`, `opas-encode` CLI |
-| `training/` | Offline tooling (Python): dataset preparation, probe training; `reference/` MLX cross-check |
-| `scripts/` | Dataset download |
-| `deploy/` | Kubernetes manifests and Helm chart |
-| `docs/` | Design notes and probe results |
-
-## Development
-
-```sh
-cargo test --workspace                                   # unit and end-to-end tests (mock upstream)
-cargo clippy --workspace --all-targets -- -D warnings
-OPAS_TEST_MODEL=models/gguf/Qwen3.5-0.8B-Q8_0.gguf cargo test --release -p opas-encoder
-```
 
 ## License
 

@@ -30,6 +30,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
+      - name: Shellcheck the installer
+        run: shellcheck scripts/install.sh scripts/*.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -106,3 +108,16 @@ jobs:
           tags: opas:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  installer-windows:
+    name: Windows installer (parse)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - name: Parse install.ps1
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+          "install.ps1 parses"

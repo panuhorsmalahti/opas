@@ -17,7 +17,7 @@ Images from CI are published as `ghcr.io/panuhorsmalahti/opas:<tag>` (see
 ## Run it
 
 The trained predictor ships in the image at `/opt/opas/probes/`. The encoder model
-(9.5 GB) does not: download it once (see the README's "Quick start") and mount it at
+(9.5 GB) does not: download it once (`scripts/install.sh` does, into `~/.local/share/opas/models`) and mount it at
 `/models`. The image's default config is `opas.example.toml` with its paths pointing
 there, routing between Claude Opus and Haiku:
 
@@ -46,7 +46,7 @@ In a mounted config, use the container paths:
 [router]
 kind = "probe"
 encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
-probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"   # shipped in the image
+probe = "/opt/opas/probes/predictor-model.json"   # shipped in the image
 weights = { quality = 60, speed = 20, cost = 20 }
 ```
 

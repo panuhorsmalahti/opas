@@ -1,7 +1,7 @@
 name: Release
 
 # On a version tag (v1.2.3): builds the `opas` server and `opas-encode` for Linux
-# (x86_64, arm64) and macOS (Apple Silicon, Metal), and publishes a GitHub Release with
+# (x86_64, arm64), macOS (Apple Silicon, Metal) and Windows (x86_64), and publishes a GitHub Release with
 # the archives, SHA-256 checksums and the trained predictor. The container image is
 # published separately by image.yml. To release: bump `version` in Cargo.toml (and the
 # Helm chart), commit, then `git tag v0.2.0 && git push origin v0.2.0`.
@@ -41,6 +41,9 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             rustflags: ""
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            rustflags: -C target-cpu=x86-64-v3
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -58,10 +61,15 @@ jobs:
       - name: Install llama.cpp build dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev
+      - name: Point bindgen at LLVM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "LIBCLANG_PATH=C:\Program Files\LLVM\bin"
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
       - name: Build
+        shell: bash
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --locked -p opas-server -p opas-encoder
@@ -69,16 +77,23 @@ jobs:
         shell: bash
         run: |
           name="opas-$TAG-${{ matrix.target }}"
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
           mkdir -p "dist/$name/probes"
-          cp target/release/opas target/release/opas-encode "dist/$name/"
+          cp "target/release/opas$exe" "target/release/opas-encode$exe" "dist/$name/"
           cp LICENSE README.md opas.example.toml "dist/$name/"
           cp probes/*.json probes/README.md "dist/$name/probes/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          if [ "$RUNNER_OS" = Windows ]; then
+            (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
+          else
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          fi
+          rm -rf "dist/$name"
           ls -l dist
       - uses: actions/upload-artifact@v7
         with:
           name: opas-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: dist/opas-*
           if-no-files-found: error
 
   release:
@@ -97,7 +112,7 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: |
-          cp probes/llmrouterbench-qwen35-9b.json dist/
+          cp probes/predictor-model.json dist/
           cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
       - name: Release notes
         run: |
@@ -109,10 +124,15 @@ jobs:
           | Linux x86_64 (AVX2, glibc 2.39+, e.g. Ubuntu 24.04) | \`opas-$TAG-x86_64-unknown-linux-gnu.tar.gz\` |
           | Linux arm64 (glibc 2.39+) | \`opas-$TAG-aarch64-unknown-linux-gnu.tar.gz\` |
           | macOS, Apple Silicon (Metal) | \`opas-$TAG-aarch64-apple-darwin.tar.gz\` |
+          | Windows x86_64 (AVX2) | \`opas-$TAG-x86_64-pc-windows-msvc.zip\` |
+
+          Install with \`curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh\`
+          (macOS, Linux) or, in PowerShell,
+          \`irm https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.ps1 | iex\` (Windows).
 
           Each archive holds \`opas\` (the server), \`opas-encode\`, the example config and the
           trained predictor (\`probes/\`). The encoder model (Qwen3.5-9B Q8_0, 9.5 GB) is
-          downloaded separately; see the README's quick start. On Linux, install
+          downloaded separately; the install scripts fetch it. On Linux, install
           \`libgomp1\` if it is missing.
 
           Container image: \`ghcr.io/${{ github.repository }}:${TAG#v}\`.

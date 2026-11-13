@@ -10,9 +10,11 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    /// Path to the TOML config.
-    #[arg(short, long, env = "OPAS_CONFIG", default_value = "opas.toml")]
-    config: PathBuf,
+    /// Path to the TOML config. Default: ./opas.toml if it exists, otherwise
+    /// $XDG_CONFIG_HOME/opas/opas.toml (~/.config/opas/opas.toml; on Windows
+    /// %APPDATA%\opas\opas.toml), where the installer puts it.
+    #[arg(short, long, env = "OPAS_CONFIG")]
+    config: Option<PathBuf>,
     /// Listen address; overrides `listen` in the config.
     #[arg(short, long, env = "OPAS_LISTEN")]
     listen: Option<String>,
@@ -27,7 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Args::parse();
-    let mut config = Config::load(&args.config)?;
+    let path = args.config.map_or_else(default_config_path, Ok)?;
+    tracing::info!(config = %path.display(), "loading config");
+    let mut config = Config::load(&path)?;
     if let Some(listen) = args.listen {
         config.listen = listen;
     }
@@ -100,6 +104,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `./opas.toml`, else the user config file. Errors name both places when neither exists.
+fn default_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let local = PathBuf::from("opas.toml");
+    if local.is_file() {
+        return Ok(local);
+    }
+    let user = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        // Windows: %APPDATA%\opas\opas.toml (where install.ps1 puts it).
+        .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
+        .map(|dir| dir.join("opas").join("opas.toml"));
+    match user {
+        Some(p) if p.is_file() => Ok(p),
+        Some(p) => Err(format!(
+            "no config found: create ./opas.toml or {} (scripts/install.sh writes one), or pass --config",
+            p.display()
+        )
+        .into()),
+        None => Err("no config found: create ./opas.toml or pass --config".into()),
+    }
+}
+
 /// The probe router needs the llama.cpp encoder (feature `probe`). Without a `[router]`,
 /// opas runs as a plain proxy.
 fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> {
@@ -123,7 +151,7 @@ fn build_gateway(config: Config) -> Result<Gateway, Box<dyn std::error::Error>> 
             for (what, path) in [("encoder model", encoder_model), ("probe", probe)] {
                 if !path.is_file() {
                     return Err(format!(
-                        "[router] {what} `{}` not found. Download the encoder model (see the README quick start; \
+                        "[router] {what} `{}` not found. Download the encoder model (scripts/install.sh does; \
                          in Docker, mount it at /models), or remove [router] to run a plain proxy",
                         path.display()
                     )

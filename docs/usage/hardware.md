@@ -60,7 +60,7 @@ Build them with `cargo build --release -p opas-server --features vulkan` (or `ro
    tail). Prefill time grows with length, so long agent contexts cost the most.
 3. **Smaller or lower-precision encoder:**
    - A Qwen3.5-4B or -2B encoder needs a probe retrained on its activations (see
-     "Training the probe" in the README).
+     [training](../training.md)).
    - A Q4_K_M quantization of the 9B is about 40% smaller and faster on CPU, but its
      activations differ slightly from Q8_0, so retrain or at least re-evaluate the probe.
 4. **Enough cores and memory bandwidth:** prefill is compute-bound. Give the pod whole

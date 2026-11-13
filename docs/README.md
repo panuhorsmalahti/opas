@@ -14,6 +14,13 @@
 All of them use the same configuration file. [opas.example.toml](../opas.example.toml)
 documents every option, and the [main README](../README.md) explains how routing works.
 
+## Training and development
+
+| Document | Contents |
+|---|---|
+| [training.md](training.md) | Training the predictor, and how well it routes |
+| [development.md](development.md) | Tests, CI, releases and the repository layout |
+
 ## Design and research
 
 | Document | Contents |
