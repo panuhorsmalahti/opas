@@ -1,46 +1,129 @@
-name: Publish image
+name: Release
 
-# Builds and pushes the container image to GitHub Container Registry on pushes to main
-# (tag `main` and `sha-…`) and on version tags (`v1.2.3` → `1.2.3`, `1.2`, `latest`).
+# On a version tag (v1.2.3): builds the `opas` server and `opas-encode` for Linux
+# (x86_64, arm64) and macOS (Apple Silicon, Metal), and publishes a GitHub Release with
+# the archives, SHA-256 checksums and the trained predictor. The container image is
+# published separately by image.yml. To release: bump `version` in Cargo.toml (and the
+# Helm chart), commit, then `git tag v0.2.0 && git push origin v0.2.0`.
 
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build a release for, e.g. v0.1.0
+        required: true
 
 permissions:
   contents: read
-  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  image:
-    runs-on: ubuntu-24.04
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # llama.cpp uses only the instruction sets Rust's target-cpu enables; x86-64-v3
+          # (AVX2/FMA) matches the Docker image.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            rustflags: -C target-cpu=x86-64-v3
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            rustflags: ""
+          # Metal is on by default on Apple platforms.
+          - os: macos-15
+            target: aarch64-apple-darwin
+            rustflags: ""
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
+          ref: ${{ env.TAG }}
+      - name: Check that the tag matches the crate version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install llama.cpp build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev
+      - uses: Swatinem/rust-cache@v2
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch
-            type=sha
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-      - uses: docker/build-push-action@v6
+          key: release-${{ matrix.target }}
+      - name: Build
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked -p opas-server -p opas-encoder
+      - name: Package
+        shell: bash
+        run: |
+          name="opas-$TAG-${{ matrix.target }}"
+          mkdir -p "dist/$name/probes"
+          cp target/release/opas target/release/opas-encode "dist/$name/"
+          cp LICENSE README.md opas.example.toml "dist/$name/"
+          cp probes/*.json probes/README.md "dist/$name/probes/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
         with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          name: opas-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp probes/llmrouterbench-qwen35-9b.json dist/
+          cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Release notes
+        run: |
+          cat > notes.md <<EOF
+          ## Downloads
+
+          | Platform | Archive |
+          |---|---|
+          | Linux x86_64 (AVX2, glibc 2.39+, e.g. Ubuntu 24.04) | \`opas-$TAG-x86_64-unknown-linux-gnu.tar.gz\` |
+          | Linux arm64 (glibc 2.39+) | \`opas-$TAG-aarch64-unknown-linux-gnu.tar.gz\` |
+          | macOS, Apple Silicon (Metal) | \`opas-$TAG-aarch64-apple-darwin.tar.gz\` |
+
+          Each archive holds \`opas\` (the server), \`opas-encode\`, the example config and the
+          trained predictor (\`probes/\`). The encoder model (Qwen3.5-9B Q8_0, 9.5 GB) is
+          downloaded separately; see the README's quick start. On Linux, install
+          \`libgomp1\` if it is missing.
+
+          Container image: \`ghcr.io/${{ github.repository }}:${TAG#v}\`.
+          EOF
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "opas $TAG" \
+              --notes-file notes.md --generate-notes
+          fi

@@ -12,7 +12,7 @@ docker build -f Dockerfile.cuda -t opas:cuda .            # NVIDIA GPU build (un
 ```
 
 Images from CI are published as `ghcr.io/panuhorsmalahti/opas:<tag>` (see
-`.github/workflows/release.yml`).
+`.github/workflows/image.yml`). Prebuilt binaries are on the GitHub Releases page.
 
 ## Run it
 

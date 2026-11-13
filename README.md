@@ -321,7 +321,11 @@ Cache-aware routing and affinity state are kept in memory in each pod, so the Se
 - Helm and Kustomize rendering;
 - a Docker build.
 
-`release.yml` publishes multi-arch images to GHCR on pushes to `main` and on `v*` tags.
+- `image.yml` publishes multi-arch images to GHCR on pushes to `main` and on `v*` tags.
+- `release.yml` builds `opas` and `opas-encode` for Linux (x86_64, arm64) and macOS
+  (Apple Silicon) on `v*` tags, and publishes them with the trained predictor as a
+  GitHub Release. To release, bump `version` in `Cargo.toml` and the Helm chart, then
+  push a tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
 ## Layout
 
