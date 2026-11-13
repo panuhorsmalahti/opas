@@ -11,7 +11,7 @@ docker build -t opas --build-arg TARGET_CPU=native .      # tuned for the build 
 docker build -f Dockerfile.cuda -t opas:cuda .            # NVIDIA GPU build (untested in CI)
 ```
 
-Images from CI are published as `ghcr.io/OWNER/opas:<tag>` (see
+Images from CI are published as `ghcr.io/panuhorsmalahti/opas:<tag>` (see
 `.github/workflows/release.yml`).
 
 ## Run it
@@ -86,7 +86,7 @@ configured model instead of `auto`.
 ```yaml
 services:
   opas:
-    image: ghcr.io/OWNER/opas:latest
+    image: ghcr.io/panuhorsmalahti/opas:latest
     ports: ["127.0.0.1:8080:8080"]   # loopback only; opas has no client auth
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}

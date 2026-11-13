@@ -9,7 +9,7 @@ kubectl create namespace opas
 kubectl -n opas create secret generic opas-api-keys --from-literal=ANTHROPIC_API_KEY=sk-ant-...
 
 helm install opas deploy/helm/opas -n opas \
-  --set image.repository=ghcr.io/OWNER/opas \
+  --set image.repository=ghcr.io/panuhorsmalahti/opas \
   --set apiKeys.existingSecret=opas-api-keys \
   --set-file config=opas.toml
 ```
@@ -29,7 +29,7 @@ prints how to try it with a port-forward.
 
 | Value | Default | Purpose |
 |---|---|---|
-| `image.repository`, `image.tag` | `ghcr.io/OWNER/opas`, chart appVersion | Image. Use the `Dockerfile.cuda` build for GPU nodes |
+| `image.repository`, `image.tag` | `ghcr.io/panuhorsmalahti/opas`, chart appVersion | Image. Use the `Dockerfile.cuda` build for GPU nodes |
 | `config` | example TOML | The full `opas.toml`. Changing it rolls the pods (checksum annotation) |
 | `apiKeys.existingSecret` | `""` | Secret whose keys become environment variables (the names in `api_key_env`) |
 | `apiKeys.values` | `{}` | Or let the chart create that Secret from these values |
@@ -51,7 +51,7 @@ prints how to try it with a port-forward.
 ```yaml
 # values-probe-gpu.yaml
 image:
-  repository: ghcr.io/OWNER/opas
+  repository: ghcr.io/panuhorsmalahti/opas
   tag: cuda                       # built from Dockerfile.cuda
 apiKeys:
   existingSecret: opas-api-keys

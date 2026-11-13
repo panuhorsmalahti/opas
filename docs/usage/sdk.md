@@ -5,8 +5,8 @@ published to crates.io yet, so depend on them by path or git:
 
 ```toml
 [dependencies]
-opas = { git = "https://github.com/OWNER/opas", features = ["gateway"] }
-opas-encoder = { git = "https://github.com/OWNER/opas" }  # probe router; builds llama.cpp (cmake)
+opas = { git = "https://github.com/panuhorsmalahti/opas", features = ["gateway"] }
+opas-encoder = { git = "https://github.com/panuhorsmalahti/opas" }  # probe router; builds llama.cpp (cmake)
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde_json = "1"
 ```

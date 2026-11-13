@@ -45,7 +45,7 @@ resources:
   - ../deploy/kubernetes
 images:
   - name: opas
-    newName: ghcr.io/OWNER/opas
+    newName: ghcr.io/panuhorsmalahti/opas
     newTag: "0.1.0"
 configMapGenerator:
   - name: opas-config
