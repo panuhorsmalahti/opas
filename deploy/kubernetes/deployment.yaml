@@ -14,6 +14,28 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # Fetch the encoder model once; later starts find it on the volume.
+        - name: fetch-models
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              f=/models/gguf/Qwen3.5-9B-Q8_0.gguf
+              if [ ! -s "$f" ]; then
+                mkdir -p /models/gguf
+                curl -fL --retry 5 -o "$f.part" \
+                  https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf
+                mv "$f.part" "$f"
+              fi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: models
+              mountPath: /models
       containers:
         - name: opas
           image: opas
@@ -29,6 +51,16 @@ spec:
             - name: config
               mountPath: /etc/opas
               readOnly: true
+            - name: models
+              mountPath: /models
+              readOnly: true
+          # Loading the encoder takes seconds on a warm volume, longer on a cold one.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 120
           readinessProbe:
             httpGet:
               path: /healthz
@@ -39,12 +71,14 @@ spec:
               path: /healthz
               port: http
             periodSeconds: 20
+          # The 9B encoder needs ~11 GiB; prefill is CPU-bound, so give it whole cores.
+          # See docs/usage/hardware.md, and the Helm chart for GPU nodes.
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
+              cpu: "4"
+              memory: 12Gi
             limits:
-              memory: 512Mi
+              memory: 14Gi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -54,3 +88,6 @@ spec:
         - name: config
           configMap:
             name: opas-config
+        - name: models
+          persistentVolumeClaim:
+            claimName: opas-models

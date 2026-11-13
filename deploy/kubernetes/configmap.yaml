@@ -6,9 +6,15 @@ data:
   opas.toml: |
     # See opas.example.toml for all options.
     listen = "0.0.0.0:8080"
+    router_model = "auto"
 
-    # No [router]: this base runs opas as a plain proxy (clients name a model).
-    # The probe router needs the encoder model on a volume; the Helm chart sets that up.
+    # The probe router. The predictor ships in the image; the encoder model is downloaded
+    # into the opas-models volume on first start. Remove [router] for a plain proxy.
+    [router]
+    kind = "probe"
+    encoder_model = "/models/gguf/Qwen3.5-9B-Q8_0.gguf"
+    probe = "/opt/opas/probes/llmrouterbench-qwen35-9b.json"
+    weights = { quality = 60, speed = 20, cost = 20 }
 
     # Cache-aware routing: conversation state is kept in memory per pod, so run one
     # replica or keep clients on one pod (the Service uses ClientIP session affinity).

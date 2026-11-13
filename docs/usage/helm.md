@@ -15,8 +15,14 @@ helm install opas deploy/helm/opas -n opas \
 ```
 
 `--set-file config=...` uses your own `opas.toml`; without it the chart's example
-config is used: a plain proxy to two Claude models, without a router. The probe
-router needs the encoder model; see the example below. After the install, `helm status`
+config is used: the probe router choosing between Claude Opus and Haiku.
+
+The predictor ships in the image. The encoder model it reads activations from
+(Qwen3.5-9B, 9.5 GB) is downloaded by an init container into a 20 Gi PVC on the first
+start; later restarts reuse it. By default the pod requests 4 CPUs and 12 Gi of memory
+and runs the encoder on CPU. For GPU nodes see the example below. For a plain proxy
+(no routing, clients name a model), remove `[router]` from `config` and set
+`models.persistence.enabled=false`, `models.download=[]` and smaller `resources`. After the install, `helm status`
 prints how to try it with a port-forward.
 
 ## Values
@@ -31,12 +37,12 @@ prints how to try it with a port-forward.
 | `service.type`, `service.port` | `ClusterIP`, `80` | Service |
 | `service.sessionAffinity` | `ClientIP` | Keeps a client's conversations on one pod (routing state is per pod) |
 | `ingress.*` | disabled | Standard Ingress |
-| `models.persistence.enabled` | `false` | PVC mounted at `models.mountPath` (`/models`) for the probe router |
+| `models.persistence.enabled` | `true` | PVC mounted at `models.mountPath` (`/models`) holding the encoder model |
 | `models.persistence.existingClaim`, `size`, `storageClass`, `accessModes` | `""`, `20Gi`, `""`, `[ReadWriteOnce]` | PVC settings |
-| `models.download` | `[]` | `{url, path}` files an init container fetches into the volume when missing |
+| `models.download` | the Qwen3.5-9B Q8_0 GGUF | `{url, path}` files an init container fetches into the volume when missing |
 | `gpu.enabled`, `gpu.resource`, `gpu.count` | `false`, `nvidia.com/gpu`, `1` | Requests a GPU for the encoder |
 | `runtimeClassName` | `""` | e.g. `nvidia` on clusters that use a GPU runtime class |
-| `resources` | 100m CPU / 64Mi requested, 512Mi limit | Raise them for the probe router (see below) |
+| `resources` | 4 CPU / 12Gi requested, 14Gi limit | Sized for the encoder on CPU (see below) |
 | `extraEnv`, `podAnnotations`, `podLabels`, `nodeSelector`, `tolerations`, `affinity` | empty | Usual pod settings |
 | `podSecurityContext`, `securityContext` | non-root, read-only root filesystem, no capabilities | Hardened defaults |
 

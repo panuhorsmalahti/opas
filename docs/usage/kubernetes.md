@@ -4,11 +4,17 @@
 
 - a Deployment;
 - a ClusterIP Service;
-- a ConfigMap with `opas.toml`.
+- a ConfigMap with `opas.toml`;
+- a 20 Gi PersistentVolumeClaim for the encoder model.
 
-It runs opas as a plain proxy: no `[router]`, so clients name the model they want.
-For the probe router, GPU nodes and model storage, the [Helm chart](helm.md) has the
-options built in.
+It runs the probe router. The predictor ships in the image; an init container downloads
+the encoder model (Qwen3.5-9B Q8_0, 9.5 GB) into the PVC on the first start. The pod
+requests 4 CPUs and 12 Gi of memory and runs the encoder on CPU. For GPU nodes and more
+options, use the [Helm chart](helm.md).
+
+For a plain proxy (clients name a model, no routing), replace the ConfigMap with a
+config without `[router]` and drop the PVC, the init container and the large resource
+requests in an overlay.
 
 ## Install
 
@@ -17,8 +23,11 @@ kubectl create namespace opas
 kubectl -n opas create secret generic opas-api-keys \
   --from-literal=ANTHROPIC_API_KEY=sk-ant-...
 kubectl -n opas apply -k deploy/kubernetes
-kubectl -n opas rollout status deploy/opas
+kubectl -n opas rollout status deploy/opas --timeout=30m
 ```
+
+The first start downloads the 9.5 GB encoder model (follow it with
+`kubectl -n opas logs deploy/opas -c fetch-models -f`). Later restarts reuse the PVC.
 
 The Secret is optional (`optional: true`). Without it, clients' own credentials are
 forwarded upstream.
@@ -79,20 +88,18 @@ So:
   source IP, but not behind a NAT shared by many clients.
 - With an ingress controller, prefer cookie- or header-based stickiness (for example
   hashing on an API key or user header).
-- One replica of the plain proxy handles high request rates. The work is forwarding,
-  not computing.
+- Each replica loads its own copy of the encoder (about 11 GiB). With the default
+  `ReadWriteOnce` PVC, replicas must share a node; use `ReadWriteMany` storage or a
+  PVC per replica (a StatefulSet) to spread them.
 
 ## Probe router on Kubernetes
 
-The probe router needs the encoder model file (9.5 GB) and roughly 11 GiB of memory per
-pod. On CPU nodes it adds seconds per routed request; GPU nodes with the CUDA image are
-the practical choice. See [hardware](hardware.md).
+On CPU nodes the encoder adds seconds per routed request; GPU nodes with the CUDA image
+are the practical choice. See [hardware](hardware.md). The Helm chart adds GPU resource
+limits and a `runtimeClassName`.
 
-The Helm chart handles the extra pieces:
-
-- a PVC;
-- an init container that downloads the model;
-- GPU resource limits and a `runtimeClassName`.
+If the cluster cannot reach Hugging Face, pre-populate the PVC with
+`gguf/Qwen3.5-9B-Q8_0.gguf`; the init container skips files that are already there.
 
 The fastest option without GPU nodes is to run the probe router natively on Apple Silicon
 hosts outside the cluster, and expose them as a Service with manual Endpoints:

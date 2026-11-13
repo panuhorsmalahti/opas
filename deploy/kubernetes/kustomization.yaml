@@ -1,8 +1,9 @@
-# Plain Kubernetes manifests for opas as a plain proxy (no router, no local models).
+# Plain Kubernetes manifests for opas with the probe router. The predictor ships in the
+# image; an init container downloads the encoder model (9.5 GB) into a PVC once.
 #   kubectl create namespace opas
 #   kubectl -n opas create secret generic opas-api-keys --from-literal=ANTHROPIC_API_KEY=...
 #   kubectl apply -n opas -k deploy/kubernetes
-# For the activation-probe router (model volume, GPU/CPU sizing) use the Helm chart.
+# For GPU nodes and other options use the Helm chart.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 labels:
@@ -12,6 +13,7 @@ labels:
     includeSelectors: true
 resources:
   - configmap.yaml
+  - pvc.yaml
   - deployment.yaml
   - service.yaml
 images:

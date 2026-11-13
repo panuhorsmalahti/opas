@@ -1,0 +1,11 @@
+# The encoder model for the probe router (Qwen3.5-9B Q8_0, 9.5 GB), downloaded once by
+# the Deployment's init container. The predictor ships in the image.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: opas-models
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi

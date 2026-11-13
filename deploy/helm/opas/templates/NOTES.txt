@@ -1,5 +1,10 @@
 opas is running as {{ include "opas.fullname" . }} in namespace {{ .Release.Namespace }}.
 
+{{- if .Values.models.download }}
+The first start downloads the encoder model into the models volume (9.5 GB); follow it with
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "opas.fullname" . }} -c fetch-models -f
+
+{{- end }}
 Try it:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "opas.fullname" . }} 8080:{{ .Values.service.port }}
   curl localhost:8080/v1/route -H 'content-type: application/json' \
