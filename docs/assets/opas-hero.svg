@@ -51,9 +51,8 @@
 <rect width="1600" height="760" rx="28" fill="url(#grid)"/>
 <rect width="1600" height="760" rx="28" fill="url(#glowA)"/>
 <rect width="1600" height="760" rx="28" fill="url(#glowB)"/>
-<text x="56" y="82" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="46" font-weight="800" fill="#eef2ff" text-anchor="start" letter-spacing="-1">opas</text>
-<text x="176" y="82" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#a8b3d6" text-anchor="start" >route every LLM request by reading a model's activations</text>
-<text x="56" y="116" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#6c7aa8" text-anchor="start" >one prefill pass · no tokens generated · predicts success, cost and response time · you choose the balance</text>
+<text x="56" y="98" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="46" font-weight="800" fill="#eef2ff" text-anchor="start" letter-spacing="-1">opas</text>
+<text x="176" y="98" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" font-weight="400" fill="#a8b3d6" text-anchor="start" >route every LLM request by reading a model's activations</text>
 <rect x="40" y="150" width="300" height="540" rx="22" fill="url(#cardFill)" stroke="#2a3766" stroke-width="1.5" filter="url(#shadow)"/>
 <circle cx="74" cy="186" r="15" fill="url(#accent)"/>
 <text x="74" y="191.5" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="800" fill="#0b1020" text-anchor="middle" >1</text>
@@ -402,7 +401,7 @@
 <text x="1122" y="570" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#fbbf24" text-anchor="end" >$$$$</text>
 <text x="1166" y="570" font-family="'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace" font-size="13" font-weight="700" fill="#2dd4bf" text-anchor="end" >20s</text>
 <rect x="882" y="606" width="286" height="36" rx="10" fill="#0f1733" stroke="#2dd4bf" stroke-opacity="0.5"/>
-<text x="1025.0" y="629" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#2dd4bf" text-anchor="middle" >lightweight predictor included in the repo</text>
+<text x="1025.0" y="629" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#2dd4bf" text-anchor="middle" >predictor model included in the repo</text>
 <text x="1025.0" y="668" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#6c7aa8" text-anchor="middle" >cost and time use your prices and speeds</text>
 <rect x="1250" y="150" width="310" height="540" rx="22" fill="url(#cardFill)" stroke="#2a3766" stroke-width="1.5" filter="url(#shadow)"/>
 <circle cx="1284" cy="186" r="15" fill="url(#accent)"/>

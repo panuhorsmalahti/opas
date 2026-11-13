@@ -126,10 +126,8 @@ add(f'<rect width="{W}" height="{H}" rx="28" fill="url(#glowA)"/>')
 add(f'<rect width="{W}" height="{H}" rx="28" fill="url(#glowB)"/>')
 
 # --- title ---------------------------------------------------------------------------
-text(56, 82, "opas", 46, TEXT, 800, extra='letter-spacing="-1"')
-text(176, 82, "route every LLM request by reading a model's activations", 22, MUTED, 400)
-text(56, 116, "one prefill pass · no tokens generated · predicts success, cost and response time · you choose the balance",
-     16, FAINT, 400)
+text(56, 98, "opas", 46, TEXT, 800, extra='letter-spacing="-1"')
+text(176, 98, "route every LLM request by reading a model's activations", 22, MUTED, 400)
 
 TOP, BOT = 150, 690
 CH = BOT - TOP
@@ -225,7 +223,7 @@ for i, (name, p, cost, secs) in enumerate(tiers):
     if i < 3:
         add(f'<line x1="{x3 + 24}" y1="{y + 56}" x2="{x3 + w3 - 24}" y2="{y + 56}" stroke="{CARD_EDGE}" stroke-opacity="0.6"/>')
 add(f'<rect x="{x3 + 22}" y="{BOT - 84}" width="{w3 - 44}" height="36" rx="10" fill="#0f1733" stroke="{TEAL}" stroke-opacity="0.5"/>')
-text(x3 + w3 / 2, BOT - 61, "lightweight predictor included in the repo", 12.5, TEAL, 600, "middle")
+text(x3 + w3 / 2, BOT - 61, "predictor model included in the repo", 12.5, TEAL, 600, "middle")
 text(x3 + w3 / 2, BOT - 22, "cost and time use your prices and speeds", 12.5, FAINT, 400, "middle")
 
 # --- 4. route ----------------------------------------------------------------------------
