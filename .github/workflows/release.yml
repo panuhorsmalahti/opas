@@ -1,7 +1,7 @@
 name: Release
 
 # On a version tag (v1.2.3): builds the `opas` server and `opas-encode` for Linux
-# (x86_64, arm64), macOS (Apple Silicon, Metal) and Windows (x86_64), and publishes a GitHub Release with
+# (x86_64, arm64), macOS (Apple Silicon, Intel) and Windows (x86_64), and publishes a GitHub Release with
 # the archives, SHA-256 checksums and the trained predictor. The container image is
 # published separately by image.yml. To release: bump `version` in Cargo.toml (and the
 # Helm chart), commit, then `git tag v0.2.0 && git push origin v0.2.0`.
@@ -41,6 +41,10 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             rustflags: ""
+          # Intel Macs (Haswell, 2013, or newer for AVX2).
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            rustflags: -C target-cpu=x86-64-v3
           - os: windows-2025
             target: x86_64-pc-windows-msvc
             rustflags: -C target-cpu=x86-64-v3
@@ -124,6 +128,7 @@ jobs:
           | Linux x86_64 (AVX2, glibc 2.39+, e.g. Ubuntu 24.04) | \`opas-$TAG-x86_64-unknown-linux-gnu.tar.gz\` |
           | Linux arm64 (glibc 2.39+) | \`opas-$TAG-aarch64-unknown-linux-gnu.tar.gz\` |
           | macOS, Apple Silicon (Metal) | \`opas-$TAG-aarch64-apple-darwin.tar.gz\` |
+          | macOS, Intel (AVX2) | \`opas-$TAG-x86_64-apple-darwin.tar.gz\` |
           | Windows x86_64 (AVX2) | \`opas-$TAG-x86_64-pc-windows-msvc.zip\` |
 
           Install with \`curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh\`

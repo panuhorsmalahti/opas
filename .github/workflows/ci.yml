@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3  # publishes no major-version tags
       - name: Install (without the Apple-only MLX reference group)
         working-directory: training
         run: uv sync --locked

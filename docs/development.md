@@ -20,8 +20,8 @@ OPAS_TEST_MODEL=models/gguf/Qwen3.5-0.8B-Q8_0.gguf cargo test --release -p opas-
 Other workflows:
 
 - `image.yml` publishes multi-arch images to GHCR on pushes to `main` and on `v*` tags.
-- `release.yml` builds `opas` and `opas-encode` for Linux (x86_64, arm64) and macOS
-  (Apple Silicon) on `v*` tags, and publishes them with the trained predictor as a
+- `release.yml` builds `opas` and `opas-encode` for Linux (x86_64, arm64), macOS
+  (Apple Silicon, Intel) and Windows (x86_64) on `v*` tags, and publishes them with the trained predictor as a
   GitHub Release. To release, bump `version` in `Cargo.toml` and the Helm chart, then
   push a tag: `git tag v0.2.0 && git push origin v0.2.0`.
 

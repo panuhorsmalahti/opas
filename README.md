@@ -92,7 +92,9 @@ export ANTHROPIC_API_KEY=...
 opas
 ```
 
-The installer (macOS on Apple Silicon, Linux x86_64 / arm64):
+The installer (macOS on Apple Silicon or Intel, Linux x86_64 / arm64; on Windows use
+`irm https://raw.githubusercontent.com/panuhorsmalahti/opas/main/scripts/install.ps1 | iex`
+in PowerShell):
 
 - puts `opas` and `opas-encode` in `~/.local/bin`, from the latest
   [release](https://github.com/panuhorsmalahti/opas/releases), after checking the checksum;

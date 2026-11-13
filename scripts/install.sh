@@ -10,7 +10,7 @@
 #   OPAS_CONFIG_DIR  config directory (default: ~/.config/opas)
 #   OPAS_SKIP_MODEL  set to 1 to skip the 9.5 GB encoder model download
 #
-# Supported: Linux x86_64 / arm64 (glibc 2.39+), macOS on Apple Silicon. Elsewhere,
+# Supported: Linux x86_64 / arm64 (glibc 2.39+), macOS (Apple Silicon, Intel). Elsewhere,
 # build from source (see the README) or use the Docker image.
 set -eu
 
@@ -34,6 +34,7 @@ case "$(uname -s)/$(uname -m)" in
   Linux/x86_64) target=x86_64-unknown-linux-gnu ;;
   Linux/aarch64 | Linux/arm64) target=aarch64-unknown-linux-gnu ;;
   Darwin/arm64) target=aarch64-apple-darwin ;;
+  Darwin/x86_64) target=x86_64-apple-darwin ;;
   MINGW*/* | MSYS*/* | CYGWIN*/*) fail "on Windows, use PowerShell: irm https://raw.githubusercontent.com/$REPO/main/scripts/install.ps1 | iex" ;;
   *) fail "no prebuilt binary for $(uname -s) $(uname -m); build from source (README) or use the Docker image" ;;
 esac
