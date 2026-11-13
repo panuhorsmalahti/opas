@@ -215,6 +215,9 @@ cargo build --release -p opas-encoder
 
 # 4. Train, evaluate, export probes/llmrouterbench-qwen35-9b.json and docs/probe-results.md
 cd training && uv run train_probe.py
+
+# Optional: compare predictor sizes and types (docs/predictor-capacity.md, ~30 min)
+uv run predictor_capacity.py
 ```
 
 **What training does:**
@@ -247,6 +250,12 @@ cd training && uv run train_probe.py
   signal is which kind of task a prompt is. The probe is better at ranking difficulty
   *within* a benchmark (cross-validated AUROC 0.672 vs 0.576 for TF-IDF), but that gain is small in
   routing terms here.
+- **Predictor size** ([docs/predictor-capacity.md](docs/predictor-capacity.md)): on the
+  same data, predictors from 51 to 4.5 million learned parameters (linear models, MLPs,
+  boosted trees) differ by at most 0.006 in routed success, and no difference is
+  distinguishable from noise. In ranking difficulty, a linear model on all 4096
+  activation dimensions is slightly better than the shipped 100-dimension one (+0.018
+  within-benchmark AUROC); a 4.5M-parameter MLP adds nothing beyond that.
 - **Limits:** the tiers are open models from 2025 rather than the Claude models in the
   example config; the xlarge head is extrapolated; speed scores use tier-default speeds.
 
