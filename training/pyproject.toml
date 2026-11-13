@@ -5,7 +5,7 @@ description = "Offline tooling for opas: dataset preparation and probe training 
 license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "numpy>=2",
+    "numpy>=2.5.4",
     "scikit-learn==1.9.1",
 ]
 

@@ -17,7 +17,7 @@ spec:
       initContainers:
         # Fetch the encoder model once; later starts find it on the volume.
         - name: fetch-models
-          image: curlimages/curl:8.10.1
+          image: curlimages/curl:8.23.0
           command: ["/bin/sh", "-ec"]
           args:
             - |

@@ -18,7 +18,7 @@ rocm = ["llama-cpp-sys-2/rocm"]
 opas = { path = "../opas" }
 # Raw llama.cpp bindings: the safe wrapper does not expose the eval callback we need.
 # Pinned: the bundled llama.cpp revision determines Qwen3.5 support and tensor names.
-llama-cpp-sys-2 = { version = "=0.1.160", default-features = false }
+llama-cpp-sys-2 = { version = "=0.1.161", default-features = false }
 async-trait.workspace = true
 clap.workspace = true
 serde.workspace = true

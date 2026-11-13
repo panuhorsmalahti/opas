@@ -9,8 +9,8 @@
 #   docker run -p 127.0.0.1:8080:8080 -v $PWD/opas.toml:/etc/opas/opas.toml:ro \
 #     -e ANTHROPIC_API_KEY opas
 
-ARG RUST_VERSION=1.94
-ARG DEBIAN_RELEASE=bookworm
+ARG RUST_VERSION=1.99
+ARG DEBIAN_RELEASE=trixie
 
 FROM rust:${RUST_VERSION}-${DEBIAN_RELEASE} AS build
 # cmake builds llama.cpp; clang/libclang are needed by bindgen for its bindings.

@@ -43,7 +43,7 @@ jobs:
             rustflags: ""
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - name: Check that the tag matches the crate version
@@ -75,7 +75,7 @@ jobs:
           cp probes/*.json probes/README.md "dist/$name/probes/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: opas-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -88,10 +88,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

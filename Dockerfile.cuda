@@ -10,11 +10,11 @@
 # CUDA_ARCHITECTURES limits the GPU architectures compiled for (faster build, smaller
 # binary), e.g. "89" for L4/RTX 40xx, "90" for H100, "80;86;89;90" for a mix.
 
-ARG CUDA_VERSION=12.6.3
+ARG CUDA_VERSION=13.5.0
 ARG UBUNTU=ubuntu24.04
 
 FROM nvidia/cuda:${CUDA_VERSION}-devel-${UBUNTU} AS build
-ARG RUST_VERSION=1.94.0
+ARG RUST_VERSION=1.99.1
 ARG CUDA_ARCHITECTURES="80;86;89;90"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl build-essential cmake clang libclang-dev pkg-config \

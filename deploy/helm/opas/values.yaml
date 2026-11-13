@@ -64,7 +64,7 @@ models:
   download:
     - url: https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q8_0.gguf
       path: gguf/Qwen3.5-9B-Q8_0.gguf
-  downloadImage: curlimages/curl:8.10.1
+  downloadImage: curlimages/curl:8.23.0
 
 service:
   type: ClusterIP
