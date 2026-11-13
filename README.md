@@ -105,7 +105,19 @@ The installer (macOS on Apple Silicon, Linux x86_64 / arm64):
 `opas` reads `./opas.toml` if present, otherwise `~/.config/opas/opas.toml`. The script's
 header lists its options (version, directories, skipping the model).
 
-**From source:**
+### Claude Code
+
+With opas running, point Claude Code at it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/panuhorsmalahti/opas/main/scripts/claude-code.sh | bash -s -- --default
+```
+
+This adds `ANTHROPIC_BASE_URL` and the model `auto` to `~/.claude/settings.json` (with a
+backup; `--uninstall` undoes it). Then run `claude` as usual. To configure it by hand
+instead, or to use your own Claude login, see [Claude Code](docs/usage/claude-code.md).
+
+### From source
 
 ```sh
 cargo install --locked --git https://github.com/panuhorsmalahti/opas opas-server
@@ -116,6 +128,8 @@ This compiles llama.cpp, which needs cmake (`brew install cmake` or
 proxy without the router and without llama.cpp. For the encoder model and a config,
 run the installer as well, with `OPAS_BIN_DIR` set to a scratch directory so it leaves
 your build in place.
+
+### Calling it
 
 Point an SDK at it (base URL `http://127.0.0.1:8080/v1`, or `http://127.0.0.1:8080` for
 Anthropic SDKs), or call it directly:

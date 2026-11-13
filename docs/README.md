@@ -4,6 +4,7 @@
 
 | Guide | When to read it |
 |---|---|
+| [Claude Code](usage/claude-code.md) | Routing Claude Code's requests through opas: the setup script, or the settings by hand |
 | [HTTP API](usage/api.md) | Calling opas from any language: the proxy endpoints, existing OpenAI / Anthropic / Gemini SDKs, the decision-only `/v1/route` |
 | [Rust SDK](usage/sdk.md) | Embedding the router in a Rust program: decisions, forwarding, custom routers, the probe router |
 | [Docker](usage/docker.md) | Running the server in a container, with or without the activation-probe router |
