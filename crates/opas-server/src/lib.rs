@@ -459,6 +459,7 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
             .weights
             .or(parsed.preference.map(Preference::weights)),
         pricing: parsed.pricing,
+        conversation_id: parsed.conversation_id,
     };
     let decided = gw
         .decide_with(parsed.api, &parsed.request, parsed.candidates, options)

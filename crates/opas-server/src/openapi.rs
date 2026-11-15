@@ -43,6 +43,11 @@ pub struct RouteBody {
     /// operator's and models.dev prices.
     #[serde(default)]
     pub pricing: HashMap<String, Pricing>,
+    /// An id shared by all turns of one conversation, so later turns are recognized
+    /// even if the history changes (also accepted as the `x-opas-conversation-id`
+    /// header on the proxy endpoints).
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 /// A routing decision, with every candidate's estimates.

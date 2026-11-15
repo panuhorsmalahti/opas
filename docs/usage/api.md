@@ -169,6 +169,12 @@ wins:
 
 Requests that name a model directly are not routed and carry only `x-opas-model`.
 
+**Request header `x-opas-conversation-id`:** an id shared by all turns of one
+conversation. opas normally recognizes a conversation by its message history; with this
+header (or Codex's `thread-id`) it also recognizes turns whose history was edited or
+compacted. For Open Responses requests that move to a different model, opas drops the
+encrypted `reasoning` items of the previous model, which the new model cannot read.
+
 ## Predicted and actual: `GET /v1/decisions/{id}`
 
 Headers are sent before the response body, so they can only carry predictions. Once a

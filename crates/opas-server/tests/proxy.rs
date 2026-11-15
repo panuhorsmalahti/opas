@@ -41,6 +41,10 @@ async fn spawn_upstream(calls: Arc<AtomicUsize>) -> String {
             "id": id,
             "model": body["model"],
             "usage": {"input_tokens": 1000, "output_tokens": 500},
+            "reasoning_items_received": body["input"].as_array().map_or(0, |items| items
+                .iter()
+                .filter(|i| i["type"] == "reasoning")
+                .count()),
             "x_goog_api_key": h("x-goog-api-key"),
             "authorization": h("authorization"),
             "x_api_key": h("x-api-key"),
@@ -1230,4 +1234,46 @@ async fn decision_only_mode_serves_route_and_refuses_to_proxy() {
     assert_eq!(record["api"], "gemini_interactions");
     assert!(record["actual"].is_null());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn codex_threads_stay_on_their_model_and_foreign_reasoning_is_dropped() {
+    let h = harness().await; // round-robin router: moves to the next model unless warm
+    let turn = |thread: &str, input: Value| {
+        req(
+            "/v1/responses",
+            json!({"model": "auto", "store": false, "input": input}),
+            &[("thread-id", thread), ("authorization", "Bearer k")],
+        )
+    };
+    let reasoning = json!({"type": "reasoning", "encrypted_content": "gAAAA…", "summary": []});
+    let user = |t: &str| json!({"role": "user", "content": [{"type": "input_text", "text": t}]});
+
+    let (_, headers, _) = send(&h.app, turn("thread-1", json!([user("fix the parser")]))).await;
+    let first = headers["x-opas-model"].to_str().unwrap().to_owned();
+
+    // Turn 2: the history was rewritten (no prefix match), but the thread id ties it to
+    // turn 1, so it stays on the same model and keeps that model's reasoning.
+    let (status, headers, body) = send(
+        &h.app,
+        turn(
+            "thread-1",
+            json!([user("fix the parser (edited)"), reasoning.clone(), {"type": "message", "role": "assistant", "content": []}, user("go on")]),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-opas-model"], first.as_str());
+    assert_eq!(headers["x-opas-previous-model"], first.as_str());
+    assert_eq!(json_body(&body)["reasoning_items_received"], 1);
+
+    // A thread opas has not seen: the reasoning's author is unknown, so it is dropped
+    // rather than sent to a model that would reject it.
+    let (status, _, body) = send(
+        &h.app,
+        turn("thread-2", json!([user("hello"), reasoning, user("more")])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&body)["reasoning_items_received"], 0);
 }

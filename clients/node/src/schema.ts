@@ -431,6 +431,12 @@ export interface components {
             api: components["schemas"]["ApiFormat"];
             /** @description Models to choose between. Defaults to the configured models that serve `api`. */
             candidates?: components["schemas"]["Candidate"][] | null;
+            /**
+             * @description An id shared by all turns of one conversation, so later turns are recognized
+             *     even if the history changes (also accepted as the `x-opas-conversation-id`
+             *     header on the proxy endpoints).
+             */
+            conversation_id?: string | null;
             preference?: components["schemas"]["Preference"] | null;
             /**
              * @description Prices by model id for this request (USD per million tokens), overriding the

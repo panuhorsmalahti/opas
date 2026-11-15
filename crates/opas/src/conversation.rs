@@ -181,6 +181,12 @@ impl PrefixKeys {
     pub fn total_tokens(&self) -> u64 {
         self.keys.last().map_or(0, |k| k.1)
     }
+
+    /// Estimated prompt tokens before the last message: what a previous turn of the
+    /// same conversation likely left in the provider's cache.
+    pub fn tokens_before_last(&self) -> u64 {
+        self.keys.len().checked_sub(2).map_or(0, |i| self.keys[i].1)
+    }
 }
 
 struct Entry {
@@ -196,6 +202,8 @@ pub struct ConversationTracker {
     max_entries: usize,
     entries: Mutex<HashMap<u64, Entry>>,
     stored: Mutex<HashMap<String, Entry>>,
+    /// Client-supplied conversation ids (Codex `thread-id`, `x-opas-conversation-id`).
+    threads: Mutex<HashMap<String, Entry>>,
 }
 
 impl ConversationTracker {
@@ -207,7 +215,40 @@ impl ConversationTracker {
             max_entries: max_entries.max(1),
             entries: Mutex::new(HashMap::new()),
             stored: Mutex::new(HashMap::new()),
+            threads: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The model that served the previous turn of a client-identified conversation.
+    /// `cached_tokens` assumes the history before the last message is still cached at
+    /// that model's provider when the previous turn was within the cache TTL.
+    pub fn lookup_thread(&self, thread: &str, keys: &PrefixKeys) -> Option<Conversation> {
+        let threads = self.threads.lock().unwrap_or_else(|p| p.into_inner());
+        let e = threads
+            .get(thread)
+            .filter(|e| e.at.elapsed() < self.state_ttl)?;
+        Some(Conversation {
+            previous_model: e.model.clone(),
+            cached_tokens: if e.at.elapsed() < self.ttl {
+                keys.tokens_before_last()
+            } else {
+                0
+            },
+        })
+    }
+
+    /// Record that `model` served the latest turn of a client-identified conversation.
+    pub fn record_thread(&self, thread: &str, model: &str) {
+        let mut threads = self.threads.lock().unwrap_or_else(|p| p.into_inner());
+        let now = Instant::now();
+        evict(&mut threads, self.max_entries, self.state_ttl, now);
+        threads.insert(
+            thread.to_owned(),
+            Entry {
+                model: model.to_owned(),
+                at: now,
+            },
+        );
     }
 
     /// How long stored response ids are remembered (providers keep them for days).

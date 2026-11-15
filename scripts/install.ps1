@@ -103,7 +103,7 @@ if (-not (($userPath -split ';') -contains $BinDir)) {
 Write-Host ""
 Write-Host "Edit models and keys in $config, then start the router:"
 Write-Host ""
-Write-Host '  $env:ANTHROPIC_API_KEY = "..."   # or leave unset to pass clients'' own keys through'
+Write-Host '  $env:ANTHROPIC_API_KEY = "..."   # the key the config''s api_key_env names'
 Write-Host '  opas'
 Write-Host ""
 Write-Host "It listens on http://127.0.0.1:8080 (OpenAI: /v1, Anthropic: the root URL)."

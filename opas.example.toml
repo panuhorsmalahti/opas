@@ -89,6 +89,16 @@ openai = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_A
 # upstream_model = "gemini-3.5-flash"
 # interactions = { base_url = "https://generativelanguage.googleapis.com/v1beta", api_key_env = "GEMINI_API_KEY" }
 
+# Claude on Amazon Bedrock: the Anthropic Messages API on the bedrock-mantle endpoint,
+# with a Bedrock API key (sent as x-api-key). Use your region; model ids as listed by
+# GET https://bedrock-mantle.<region>.api.aws/v1/models.
+# [[models]]
+# id = "claude-opus-5-5"
+# tier = "large"
+# upstream_model = "anthropic.claude-opus-5-5"
+# models_dev = "amazon-bedrock/anthropic.claude-opus-5-5"
+# anthropic = { base_url = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1", api_key_env = "AWS_BEARER_TOKEN_BEDROCK" }
+
 # A model behind an Open Responses provider:
 # [[models]]
 # id = "glm"

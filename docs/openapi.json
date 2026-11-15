@@ -1465,6 +1465,13 @@
             },
             "description": "Models to choose between. Defaults to the configured models that serve `api`."
           },
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An id shared by all turns of one conversation, so later turns are recognized\neven if the history changes (also accepted as the `x-opas-conversation-id`\nheader on the proxy endpoints)."
+          },
           "preference": {
             "oneOf": [
               {

@@ -118,7 +118,7 @@ case ":$PATH:" in
 esac
 say "Edit models and keys in $config, then start the router:"
 say ""
-say "  export ANTHROPIC_API_KEY=...   # or leave unset to pass clients' own keys through"
+say "  export ANTHROPIC_API_KEY=...   # the key the config's api_key_env names"
 say "  opas"
 say ""
 say "It listens on http://127.0.0.1:8080 (OpenAI: /v1, Anthropic: the root URL)."

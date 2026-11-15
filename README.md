@@ -147,6 +147,17 @@ This adds `ANTHROPIC_BASE_URL` and the model `auto` to `~/.claude/settings.json`
 backup; `--uninstall` undoes it). Then run `claude` as usual. To configure it by hand
 instead, or to use your own Claude login, see [Claude Code](docs/usage/claude-code.md).
 
+### Codex
+
+With opas routing between OpenAI models, add an `opas` profile to Codex:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/panuhorsmalahti/opas/main/scripts/codex.sh | bash
+codex --profile opas
+```
+
+See [Codex](docs/usage/codex.md) for the opas config it needs and the settings by hand.
+
 ### From source
 
 ```sh

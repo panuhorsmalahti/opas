@@ -41,6 +41,23 @@ pub struct RequestOptions {
     pub weights: Option<Weights>,
     /// Prices by model id, overriding the operator's and models.dev prices.
     pub pricing: HashMap<String, Pricing>,
+    /// A client-supplied conversation id (`x-opas-conversation-id`, or Codex's
+    /// `thread-id`): turns with the same id are recognized as one conversation even
+    /// when the history fingerprints differ.
+    pub conversation_id: Option<String>,
+}
+
+/// Request header: a client-chosen id shared by all turns of one conversation.
+pub const HEADER_CONVERSATION_ID: &str = "x-opas-conversation-id";
+
+/// The conversation id from `x-opas-conversation-id`, else Codex's `thread-id`.
+pub fn conversation_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    [HEADER_CONVERSATION_ID, "thread-id"]
+        .iter()
+        .find_map(|h| headers.get(*h)?.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && v.len() <= 256)
+        .map(str::to_owned)
 }
 
 impl RequestOptions {
@@ -53,6 +70,7 @@ impl RequestOptions {
         };
         Ok(Self {
             weights: weights_from_headers(headers)?,
+            conversation_id: conversation_id_from_headers(headers),
             pricing,
         })
     }
@@ -377,7 +395,12 @@ impl Gateway {
             .map_err(GatewayError::BadRequest)?;
         let keys = self.tracker.as_ref().map(|_| PrefixKeys::new(format, body));
         if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
-            request.conversation = tracker.lookup(keys);
+            request.conversation = tracker.lookup(keys).or_else(|| {
+                options
+                    .conversation_id
+                    .as_deref()
+                    .and_then(|id| tracker.lookup_thread(id, keys))
+            });
         }
         if let Some(id) = &request.continuation_id {
             match self.tracker.as_ref().and_then(|t| t.lookup_stored(id)) {
@@ -422,6 +445,9 @@ impl Gateway {
         });
         if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
             tracker.record(keys, &decision.model);
+            if let Some(id) = &options.conversation_id {
+                tracker.record_thread(id, &decision.model);
+            }
         }
         decision.conversation = request.conversation;
         Ok(decision)
@@ -458,11 +484,17 @@ impl Gateway {
         } else {
             // Direct requests also update the tracker, so a later routed turn of the same
             // conversation knows which model's cache is warm.
+            let thread = conversation_id_from_headers(client_headers);
             let conversation = self.tracker.as_ref().and_then(|t| {
                 let keys = PrefixKeys::new(format, &body);
-                let conversation = t.lookup(&keys);
+                let conversation = t
+                    .lookup(&keys)
+                    .or_else(|| thread.as_deref().and_then(|id| t.lookup_thread(id, &keys)));
                 if self.config.model(&requested).is_some() {
                     t.record(&keys, &requested);
+                    if let Some(id) = &thread {
+                        t.record_thread(id, &requested);
+                    }
                 }
                 conversation
             });
@@ -479,6 +511,30 @@ impl Gateway {
                 model: model_id.clone(),
                 format,
             })?;
+
+        // Encrypted reasoning items can only be read by the model that produced them.
+        // Drop them unless that is known to be the model this request goes to: for
+        // routed requests whenever the previous model is unknown or different, for
+        // direct requests only when it is known to be different.
+        if format == ApiFormat::OpenResponses {
+            let same = conversation.as_ref().map(|c| c.previous_model == model_id);
+            let strip = if decision.is_some() {
+                same != Some(true)
+            } else {
+                same == Some(false)
+            };
+            if strip {
+                let n = strip_reasoning_items(&mut body);
+                if n > 0 {
+                    tracing::info!(
+                        model = %model_id,
+                        previous_model = conversation.as_ref().map_or("unknown", |c| c.previous_model.as_str()),
+                        items = n,
+                        "dropped reasoning items from another model"
+                    );
+                }
+            }
+        }
 
         body["model"] = Value::String(model.upstream_model().to_owned());
         let url = format!(
@@ -505,6 +561,16 @@ impl Gateway {
             sent_at,
         })
     }
+}
+
+/// Remove `reasoning` items from an Open Responses `input` array. Returns how many.
+pub fn strip_reasoning_items(body: &mut Value) -> usize {
+    let Some(Value::Array(items)) = body.get_mut("input") else {
+        return 0;
+    };
+    let before = items.len();
+    items.retain(|i| i.get("type").and_then(Value::as_str) != Some("reasoning"));
+    before - items.len()
 }
 
 /// Auth and protocol headers for the upstream request. A configured key replaces the
@@ -576,6 +642,33 @@ fn upstream_headers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_only_reasoning_items_and_reads_conversation_ids() {
+        let mut body = serde_json::json!({"input": [
+            {"type": "message", "role": "user", "content": "a"},
+            {"type": "reasoning", "encrypted_content": "x"},
+            {"type": "function_call", "name": "f"},
+            {"type": "reasoning", "encrypted_content": "y"}
+        ]});
+        assert_eq!(strip_reasoning_items(&mut body), 2);
+        assert_eq!(body["input"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            strip_reasoning_items(&mut serde_json::json!({"input": "text"})),
+            0
+        );
+
+        let mut h = HeaderMap::new();
+        assert_eq!(conversation_id_from_headers(&h), None);
+        h.insert("thread-id", HeaderValue::from_static("t1"));
+        assert_eq!(conversation_id_from_headers(&h).as_deref(), Some("t1"));
+        h.insert(HEADER_CONVERSATION_ID, HeaderValue::from_static("c1"));
+        assert_eq!(
+            conversation_id_from_headers(&h).as_deref(),
+            Some("c1"),
+            "explicit header wins"
+        );
+    }
 
     fn upstream(env: Option<&str>) -> Upstream {
         Upstream {
