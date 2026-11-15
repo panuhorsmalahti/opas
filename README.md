@@ -154,6 +154,7 @@ curl localhost:8080/v1/messages -H 'content-type: application/json' -d '{
 | `POST /v1/route` | Decision only (nothing forwarded) |
 | `GET /v1/pricing` | Resolved price per model and its source |
 | `GET /v1/models`, `GET /healthz` | Model list, liveness |
+| `GET /openapi.json`, `GET /openapi.yaml`, `GET /docs` | OpenAPI 3.1 document, and a browsable reference |
 
 **Routed vs direct:** send `"model": "auto"` to be routed, or a configured model id to go
 direct.
@@ -165,6 +166,7 @@ direct.
 | `x-opas-model` | always | the model that served the request |
 | `x-opas-router` | routed requests | the router that decided |
 | `x-opas-decision-id` | routed requests | the decision's id |
+| `x-opas-estimate` | routed requests | the chosen model's predicted success, cost and response time |
 | `x-opas-previous-model` | continued conversations | the model that served the previous turn |
 
 **Credentials:** if a model's upstream sets `api_key_env`, opas uses that key.
@@ -191,7 +193,28 @@ curl localhost:8080/v1/route -H 'content-type: application/json' -d '{
 `api` is one of `openai_chat`, `anthropic_messages`, `open_responses` or
 `gemini_interactions`. Without `candidates`, the configured models are used.
 
-### As a library
+### From Node.js
+
+[opas-client](clients/node/README.md) is a typed client for Node servers: options that
+point the OpenAI and Anthropic SDKs at opas, `route()` for decisions, and
+`readDecision()` for the model opas chose.
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+import { Opas, readDecision } from "opas-client";
+
+const opas = new Opas();
+const anthropic = new Anthropic(opas.anthropic());
+const { data, response } = await anthropic.messages
+  .create({ model: "auto", max_tokens: 1024, messages: [{ role: "user", content: "hi" }] })
+  .withResponse();
+readDecision(response); // { model: "claude-haiku-5-5", estimate: { pSuccess: 0.81, … }, … }
+```
+
+Other languages can generate a client from the [OpenAPI document](docs/openapi.json)
+(also served at `/openapi.json`).
+
+### As a Rust library
 
 Use the crates directly: `opas` for decisions and forwarding, `opas-encoder` for
 the encoder and `ProbeRouter`. Each crate has its own README:

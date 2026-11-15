@@ -114,6 +114,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Node.js client package
+        working-directory: clients/node
+        run: |
+          npm ci
+          npm version "${TAG#v}" --no-git-tag-version --allow-same-version
+          npm pack --pack-destination ../../dist
       - name: Checksums
         run: |
           cp probes/predictor-model.json dist/
@@ -139,6 +148,8 @@ jobs:
           trained predictor (\`probes/\`). The encoder model (Qwen3.5-9B Q8_0, 9.5 GB) is
           downloaded separately; the install scripts fetch it. On Linux, install
           \`libgomp1\` if it is missing.
+
+          Node.js client: \`npm install https://github.com/${{ github.repository }}/releases/download/$TAG/opas-client-${TAG#v}.tgz\`.
 
           Container image: \`ghcr.io/${{ github.repository }}:${TAG#v}\`.
           EOF

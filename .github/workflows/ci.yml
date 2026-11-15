@@ -121,3 +121,37 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors; exit 1 }
           "install.ps1 parses"
+
+  node-client:
+    name: Node.js client and OpenAPI document
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: clients/node/package-lock.json
+      # The plain-proxy build: enough to serve the API and print the OpenAPI document.
+      - run: cargo build -p opas-server --no-default-features
+      - name: docs/openapi.json is up to date
+        run: |
+          ./target/debug/opas --openapi | jq 'del(.info.version)' > /tmp/served.json
+          jq 'del(.info.version)' docs/openapi.json > /tmp/committed.json
+          diff -u /tmp/committed.json /tmp/served.json \
+            || { echo "::error::regenerate with: cargo run -p opas-server --no-default-features -- --openapi > docs/openapi.json"; exit 1; }
+      - name: Install
+        working-directory: clients/node
+        run: npm ci
+      - name: Generated types are up to date
+        working-directory: clients/node
+        run: npm run generate && git diff --exit-code src/schema.ts
+      - working-directory: clients/node
+        run: npm run typecheck && npm run build
+      - name: Test (including against the opas binary)
+        working-directory: clients/node
+        env:
+          OPAS_BIN: ${{ github.workspace }}/target/debug/opas
+        run: npm test

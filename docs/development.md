@@ -1,6 +1,7 @@
 # Development
 
 ```sh
+cargo run -p opas-server --no-default-features -- --openapi > docs/openapi.json   # after API changes
 cargo test --workspace                                   # unit and end-to-end tests (mock upstream)
 cargo clippy --workspace --all-targets -- -D warnings
 OPAS_TEST_MODEL=models/gguf/Qwen3.5-0.8B-Q8_0.gguf cargo test --release -p opas-encoder
@@ -31,6 +32,7 @@ Other workflows:
 |---|---|
 | `crates/opas` | Library / SDK: request parsing for four APIs, `Router` trait, tiers, cache-aware conversation tracking, config, gateway |
 | `crates/opas-server` | The `opas` HTTP server |
+| `clients/node` | Node.js client (`opas-client`), typed from `docs/openapi.json` |
 | `crates/opas-encoder` | In-process llama.cpp encoder, probe format, `ProbeRouter`, `opas-encode` CLI |
 | `training/` | Offline tooling (Python): dataset preparation, probe training; `reference/` MLX cross-check |
 | `scripts/` | Installer and dataset download |
