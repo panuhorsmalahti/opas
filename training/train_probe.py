@@ -222,7 +222,7 @@ def routing_eval(p, k_pred, frac, cost, price_per_token, lambdas):
 # and speed on fixed log scales.
 COST_RANGE, TIME_RANGE = 100.0, 10.0
 # Tier default speeds (opas::Tier::default_speed): output tokens/s, time to first token.
-TIER_SPEED = {"small": (150.0, 0.4), "medium": (80.0, 0.6), "large": (50.0, 1.0), "xlarge": (35.0, 1.5)}
+TIER_SPEED = {"small": (180.0, 0.8), "medium": (120.0, 1.2), "large": (90.0, 1.4), "xlarge": (80.0, 1.5)}
 PRESETS = {"quality": (100, 0, 0), "balanced": (60, 20, 20), "cost": (20, 10, 70), "speed": (20, 70, 10)}
 
 

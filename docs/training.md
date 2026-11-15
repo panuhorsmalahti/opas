@@ -46,12 +46,12 @@ On the held-out split (832 prompts; full report in
 |---|---|---|
 | always small / medium / large | 0.475 / 0.517 / 0.574 | $0.014 / $0.018 / $0.042 |
 | opas, `quality` preset (100/0/0) | 0.577 | $0.034 |
-| opas, default `balanced` (60/20/20) | 0.548 | $0.024 |
-| random routing at the same $0.024 | 0.509 | $0.024 |
+| opas, default `balanced` (60/20/20) | 0.552 | $0.025 |
+| random routing at the same $0.025 | 0.512 | $0.025 |
 | oracle (best tier per prompt) | 0.640 | $0.021 |
 
 - **What works:** with the default weights, opas beats random routing at the same cost
-  by 3.9 points, and comes within 2.6 points of always using the large tier at 57% of
+  by 4.0 points, and comes within 2.2 points of always using the large tier at 59% of
   its cost. The `quality` preset matches always-large at 83% of its cost.
 - **What doesn't (yet):** on this benchmark, a TF-IDF bag-of-words router does about as
   well as the activation probe (within a point at every cost level). Most of the

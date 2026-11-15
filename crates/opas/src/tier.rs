@@ -52,14 +52,21 @@ impl Tier {
 }
 
 impl Tier {
-    /// Rough typical serving speed for the tier, used when a model has no configured
-    /// `speed`. Real numbers vary a lot by provider and load; configure them per model.
+    /// Typical serving speed for the tier, used when a model has no configured `speed`.
+    ///
+    /// Output speed counts thinking tokens, as the predicted output tokens do; time to
+    /// first token is to the first token of any kind. Set from Anthropic's models measured
+    /// in November 2026 (Haiku 5.5 about 210–260 tokens/s, Sonnet 5.5 115–175, Opus 5.5
+    /// 100–125, Fable 5.2 100–125; first token after 0.6–2 s, nearly independent of
+    /// prompt length up to 30k tokens), rounded down a little because the tiers also
+    /// cover other providers. Real numbers vary with provider, load and effort level;
+    /// configure `speed` per model when they matter.
     pub fn default_speed(self) -> Speed {
         let (output_tokens_per_sec, ttft_s) = match self {
-            Tier::Small => (150.0, 0.4),
-            Tier::Medium => (80.0, 0.6),
-            Tier::Large => (50.0, 1.0),
-            Tier::Xlarge => (35.0, 1.5),
+            Tier::Small => (180.0, 0.8),
+            Tier::Medium => (120.0, 1.2),
+            Tier::Large => (90.0, 1.4),
+            Tier::Xlarge => (80.0, 1.5),
         };
         Speed {
             output_tokens_per_sec,
