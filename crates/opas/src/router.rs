@@ -95,6 +95,29 @@ pub struct Decision {
     /// The quality / speed / cost weights the router used, if it uses them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weights: Option<Weights>,
+    /// How long the decision took (set by routers that measure it, and by the gateway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<RouterTiming>,
+}
+
+/// Where the time of a routing decision went, in milliseconds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct RouterTiming {
+    /// The whole decision, as the gateway measured it.
+    pub total_ms: f64,
+    /// Waiting for the encoder, which runs one request at a time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_ms: Option<f64>,
+    /// The encoder's pass over the prompt: computing the activations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encode_ms: Option<f64>,
+    /// The predictor heads and the scoring of every candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predict_ms: Option<f64>,
+    /// Prompt tokens the encoder read (after truncation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoded_tokens: Option<u64>,
 }
 
 #[derive(Debug, thiserror::Error)]

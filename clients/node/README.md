@@ -38,9 +38,14 @@ const { data, response } = await anthropic.messages
   .withResponse();
 
 console.log(data.content);
-console.log(readDecision(response));
-// { model: "claude-haiku-5-5", router: "probe", decisionId: "…",
-//   estimate: { pSuccess: 0.81, costUsd: 0.0004, responseTimeS: 2.1 } }
+const decision = readDecision(response);
+// { model: "claude-haiku-5-5", router: "probe", decisionId: "…", routingMs: 172.4,
+//   estimate: { pSuccess: 0.83, costUsd: 0.00125, responseTimeS: 14.7, outputTokens: 2502 },
+//   candidates: [{ model: "claude-haiku-5-5", pSuccess: 0.83, … }, { model: "claude-opus-5-5", … }] }
+
+// After the response: what it actually cost and how long it took.
+const record = await opas.decision(decision!.decisionId!);
+record.actual; // { usage: {...}, cost_usd: 0.000199, total_time_s: 2.4, output_tokens_per_sec: 155.2, … }
 ```
 
 ```ts
@@ -87,6 +92,7 @@ Then call the chosen model however you like.
 |---|---|
 | `new Opas({ baseUrl?, fetch?, headers?, timeoutMs? })` | A client for one server |
 | `opas.route(body)` | `POST /v1/route`: a decision and estimates |
+| `opas.decision(id)` | `GET /v1/decisions/{id}`: a decision's prediction, routing time, and the actual tokens, cost and time once the response has ended |
 | `opas.pricing()` | `GET /v1/pricing`: prices in effect and their source |
 | `opas.models()` | `GET /v1/models` |
 | `opas.health()` | `true` when the server answers `/healthz` |

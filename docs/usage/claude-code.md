@@ -85,8 +85,10 @@ Claude Code shows the configured model, `auto`, not the model opas chose for eac
 request; it does not display response headers. To see the choices:
 
 - opas logs every decision (`decided … model=…`) at the default log level;
-- every response carries `x-opas-model`, `x-opas-estimate` (predicted success, cost and
-  time) and `x-opas-decision-id`;
+- every response carries `x-opas-model`, the prediction (`x-opas-p-success`,
+  `x-opas-cost-usd`, `x-opas-response-time-s`) and `x-opas-decision-id`;
+- `GET /v1/decisions/{id}` shows, after the response, the actual tokens, cost and time
+  next to the prediction, and the log line `completed` has the same;
 - `POST /v1/route` explains a decision without sending anything upstream
   ([API](api.md)).
 

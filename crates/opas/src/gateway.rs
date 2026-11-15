@@ -125,6 +125,8 @@ pub struct Forwarded {
     pub decision: Option<Decision>,
     /// The conversation this request continued, if cache-aware routing recognized it.
     pub conversation: Option<crate::Conversation>,
+    /// When the request was sent upstream (after routing), for timing the response.
+    pub sent_at: std::time::Instant,
 }
 
 /// Routes requests and forwards them to the chosen model's upstream.
@@ -134,6 +136,7 @@ pub struct Gateway {
     tracker: Option<ConversationTracker>,
     catalog: RwLock<Arc<PriceCatalog>>,
     http: reqwest::Client,
+    decisions: crate::decisions::DecisionLog,
 }
 
 impl Gateway {
@@ -161,7 +164,23 @@ impl Gateway {
             router,
             catalog: RwLock::new(Arc::new(PriceCatalog::default())),
             http: reqwest::Client::new(),
+            decisions: crate::decisions::DecisionLog::default(),
         }
+    }
+
+    /// Recent decisions and their measured outcomes.
+    pub fn decisions(&self) -> &crate::decisions::DecisionLog {
+        &self.decisions
+    }
+
+    /// The price that applies to `model_id` for a request with these client headers: a
+    /// per-request `x-opas-pricing` override, else the config, models.dev or the tier's
+    /// default.
+    pub fn price_for(&self, model_id: &str, client_headers: &HeaderMap) -> Option<Pricing> {
+        RequestOptions::from_headers(client_headers)
+            .ok()
+            .and_then(|o| o.pricing.get(model_id).copied())
+            .or_else(|| self.model_price(model_id).0)
     }
 
     /// Replace the models.dev price catalog.
@@ -368,6 +387,7 @@ impl Gateway {
                         conversation: request.conversation,
                         estimates: vec![],
                         weights: None,
+                        timing: None,
                     });
                 }
                 Some(model) => {
@@ -387,7 +407,13 @@ impl Gateway {
                 self.config.router_model
             )));
         };
+        let started = std::time::Instant::now();
         let mut decision = router.route(&request, &candidates).await?;
+        let total_ms = started.elapsed().as_secs_f64() * 1e3;
+        decision.timing = Some(crate::router::RouterTiming {
+            total_ms,
+            ..decision.timing.unwrap_or_default()
+        });
         if let (Some(tracker), Some(keys)) = (&self.tracker, &keys) {
             tracker.record(keys, &decision.model);
         }
@@ -457,6 +483,7 @@ impl Gateway {
         let headers = upstream_headers(format, upstream, client_headers)?;
 
         tracing::debug!(%format, model = %model_id, %url, "forwarding");
+        let sent_at = std::time::Instant::now();
         let response = self
             .http
             .post(url)
@@ -469,6 +496,7 @@ impl Gateway {
             model: model_id,
             decision,
             conversation,
+            sent_at,
         })
     }
 }

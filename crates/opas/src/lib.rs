@@ -28,6 +28,7 @@
 //!             conversation: None,
 //!             estimates: vec![],
 //!             weights: None,
+//!             timing: None,
 //!         })
 //!     }
 //! }
@@ -53,18 +54,22 @@ pub mod api;
 pub mod catalog;
 pub mod config;
 pub mod conversation;
+pub mod decisions;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod request;
 pub mod router;
 pub mod scoring;
 pub mod tier;
+pub mod usage;
 
 pub use api::ApiFormat;
 pub use catalog::{PriceCatalog, PriceSource};
 pub use config::{CacheConfig, Config, ConfigError, ModelConfig, RouterConfig, Upstream};
 pub use conversation::{Conversation, ConversationTracker, LongContextPricing, Pricing, Speed};
+pub use decisions::{Actual, DecisionLog, DecisionRecord};
 pub use request::{Message, RequestError, RouteRequest};
-pub use router::{Candidate, Decision, RouteError, Router};
+pub use router::{Candidate, Decision, RouteError, Router, RouterTiming};
 pub use scoring::{Estimate, Preference, Weights};
 pub use tier::Tier;
+pub use usage::{Usage, UsageScanner};

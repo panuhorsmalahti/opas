@@ -26,6 +26,10 @@ export type Speed = Schemas["Speed"];
 export type Tier = Schemas["Tier"];
 export type Weights = Schemas["Weights"];
 export type ModelList = Schemas["OpenAiModelList"];
+export type DecisionRecord = Schemas["DecisionRecord"];
+export type Actual = Schemas["Actual"];
+export type Usage = Schemas["Usage"];
+export type RouterTiming = Schemas["RouterTiming"];
 
 /** The default address of a local opas server. */
 export const DEFAULT_BASE_URL = "http://127.0.0.1:8080";
@@ -66,17 +70,41 @@ export class OpasError extends Error {
   }
 }
 
+/** A model's prediction: success probability, expected cost (USD) and time (s). */
+export interface Prediction {
+  pSuccess?: number;
+  costUsd?: number;
+  responseTimeS?: number;
+  /** Expected output tokens (chosen model only). */
+  outputTokens?: number;
+}
+
 /** The routing decision opas made for a proxied request, from its response headers. */
 export interface Decision {
   /** The configured model that served the request. */
   model: string;
   /** `probe` or `affinity`; absent when the request named a model directly. */
   router?: string;
+  /** Look up the measured outcome later with `opas.decision(decisionId)`. */
   decisionId?: string;
-  /** Predictions for the chosen model (routed requests with the probe router). */
-  estimate?: { pSuccess?: number; costUsd?: number; responseTimeS?: number };
+  /** The chosen model's prediction (routed requests with the probe router). */
+  estimate?: Prediction;
+  /** Every candidate's prediction, best first. */
+  candidates?: (Prediction & { model: string })[];
+  /** How long the routing decision took, in milliseconds (encoder + predictor). */
+  routingMs?: number;
   /** The model that served the previous turn, when opas recognized the conversation. */
   previousModel?: string;
+}
+
+function parseFields(s: string): Prediction {
+  const f = Object.fromEntries(
+    s.split(/;\s*/).map((kv) => {
+      const [k, v] = kv.split("=");
+      return [k?.trim(), Number(v)];
+    }),
+  ) as Record<string, number>;
+  return { pSuccess: f["p_success"], costUsd: f["cost_usd"], responseTimeS: f["response_time_s"] };
 }
 
 type HeaderSource =
@@ -106,20 +134,30 @@ export function readDecision(source: HeaderSource): Decision | undefined {
   if (decisionId) decision.decisionId = decisionId;
   const previous = get("x-opas-previous-model");
   if (previous) decision.previousModel = previous;
+  const num = (name: string): number | undefined => {
+    const v = get(name);
+    return v === undefined ? undefined : Number(v);
+  };
+  const pSuccess = num("x-opas-p-success");
   const estimate = get("x-opas-estimate");
-  if (estimate) {
-    const fields = Object.fromEntries(
-      estimate.split(/[;,]\s*/).map((kv) => {
-        const [k, v] = kv.split("=");
-        return [k?.trim(), Number(v)];
-      }),
-    ) as Record<string, number>;
+  if (pSuccess !== undefined || estimate) {
     decision.estimate = {
-      pSuccess: fields["p_success"],
-      costUsd: fields["cost_usd"],
-      responseTimeS: fields["response_time_s"],
+      ...(estimate ? parseFields(estimate) : {}),
+      ...(pSuccess !== undefined ? { pSuccess } : {}),
+      ...(num("x-opas-cost-usd") !== undefined ? { costUsd: num("x-opas-cost-usd") } : {}),
+      ...(num("x-opas-response-time-s") !== undefined ? { responseTimeS: num("x-opas-response-time-s") } : {}),
+      ...(num("x-opas-output-tokens") !== undefined ? { outputTokens: num("x-opas-output-tokens") } : {}),
     };
   }
+  const candidates = get("x-opas-candidates");
+  if (candidates) {
+    decision.candidates = candidates.split(/,\s*/).map((item) => {
+      const [model, ...rest] = item.split(/;\s*/);
+      return { model: model!.trim(), ...parseFields(rest.join("; ")) };
+    });
+  }
+  const routingMs = num("x-opas-routing-ms");
+  if (routingMs !== undefined) decision.routingMs = routingMs;
   return decision;
 }
 
@@ -167,6 +205,15 @@ export class Opas {
    */
   route(body: RouteRequest): Promise<RouteResponse> {
     return this.call<RouteResponse>("POST", "/v1/route", body);
+  }
+
+  /**
+   * A recent routing decision: every candidate's prediction, how long routing took and,
+   * once the response has finished, what actually happened (tokens, cost, time).
+   * `id` is a proxied response's `x-opas-decision-id` (`readDecision(res).decisionId`).
+   */
+  decision(id: string): Promise<DecisionRecord> {
+    return this.call<DecisionRecord>("GET", `/v1/decisions/${encodeURIComponent(id)}`);
   }
 
   /** Prices in effect for the configured models, and where each came from. */

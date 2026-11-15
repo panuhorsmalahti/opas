@@ -155,6 +155,7 @@ impl Router for LengthRouter {
             conversation: None,
             estimates: vec![],
             weights: None,
+            timing: None,
         })
     }
 }

@@ -84,6 +84,16 @@ Default tier prices (USD per million tokens) are used when a model has no `prici
 | large | 4.00 | 0.20 | 20.00 |
 | xlarge | 8.00 | 0.20 | 40.00 |
 
+and default speeds when it has no `speed` (output tokens per second including thinking;
+time to first token), set from Anthropic's models measured in November 2026:
+
+| Tier | Output speed | Time to first token |
+|---|---|---|
+| small | 180 tokens/s | 0.8 s |
+| medium | 120 tokens/s | 1.2 s |
+| large | 90 tokens/s | 1.4 s |
+| xlarge | 80 tokens/s | 1.5 s |
+
 ## Quick start
 
 ```sh
@@ -152,6 +162,7 @@ curl localhost:8080/v1/messages -H 'content-type: application/json' -d '{
 | `POST /v1/responses` | Open Responses |
 | `POST /v1beta/interactions`, `POST /v1/interactions` | Gemini Interactions |
 | `POST /v1/route` | Decision only (nothing forwarded) |
+| `GET /v1/decisions/{id}` | A recent decision: predicted and actual cost, time and tokens |
 | `GET /v1/pricing` | Resolved price per model and its source |
 | `GET /v1/models`, `GET /healthz` | Model list, liveness |
 | `GET /openapi.json`, `GET /openapi.yaml`, `GET /docs` | OpenAPI 3.1 document, and a browsable reference |
@@ -165,8 +176,10 @@ direct.
 |---|---|---|
 | `x-opas-model` | always | the model that served the request |
 | `x-opas-router` | routed requests | the router that decided |
-| `x-opas-decision-id` | routed requests | the decision's id |
-| `x-opas-estimate` | routed requests | the chosen model's predicted success, cost and response time |
+| `x-opas-decision-id` | routed requests | the decision's id; `GET /v1/decisions/{id}` adds the measured cost and time once the response ends |
+| `x-opas-p-success`, `x-opas-cost-usd`, `x-opas-response-time-s` | routed requests | the chosen model's predicted success, cost and response time |
+| `x-opas-candidates` | routed requests | the same for every candidate, best first |
+| `x-opas-routing-ms` | routed requests | how long routing took (encoder + predictor) |
 | `x-opas-previous-model` | continued conversations | the model that served the previous turn |
 
 **Credentials:** if a model's upstream sets `api_key_env`, opas uses that key.

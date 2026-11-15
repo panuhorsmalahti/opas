@@ -37,6 +37,7 @@ impl Router for ByLength {
             conversation: None,
             estimates: Vec::new(),
             weights: None,
+            timing: None,
         })
     }
 }

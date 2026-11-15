@@ -127,6 +127,23 @@ describe("helpers", () => {
     assert.deepEqual(readDecision(h), expected);
     assert.deepEqual(readDecision(new Response("", { headers: h })), expected);
     assert.deepEqual(readDecision({ "x-opas-model": "small" }), { model: "small" });
+    const full = readDecision({
+      "x-opas-model": "big",
+      "x-opas-decision-id": "d9",
+      "x-opas-p-success": "0.880",
+      "x-opas-cost-usd": "0.014000",
+      "x-opas-response-time-s": "9.80",
+      "x-opas-output-tokens": "800",
+      "x-opas-routing-ms": "142.5",
+      "x-opas-candidates":
+        "big; p_success=0.880; cost_usd=0.014000; response_time_s=9.80, small; p_success=0.450; cost_usd=0.000250; response_time_s=2.47",
+    });
+    assert.deepEqual(full?.estimate, { pSuccess: 0.88, costUsd: 0.014, responseTimeS: 9.8, outputTokens: 800 });
+    assert.equal(full?.routingMs, 142.5);
+    assert.deepEqual(full?.candidates, [
+      { model: "big", pSuccess: 0.88, costUsd: 0.014, responseTimeS: 9.8 },
+      { model: "small", pSuccess: 0.45, costUsd: 0.00025, responseTimeS: 2.47 },
+    ]);
     assert.equal(readDecision({ "content-type": "application/json" }), undefined);
   });
 

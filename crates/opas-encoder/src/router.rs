@@ -16,9 +16,12 @@
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use async_trait::async_trait;
-use opas::{Candidate, Decision, Estimate, RouteError, RouteRequest, Router, Tier, Weights};
+use opas::{
+    Candidate, Decision, Estimate, RouteError, RouteRequest, Router, RouterTiming, Tier, Weights,
+};
 
 use crate::probe::{Pooling, Probe, ProbeError};
 use crate::{Encoder, EncoderConfig, EncoderError, ThinkingMode};
@@ -170,19 +173,31 @@ impl ProbeRouter {
     }
 
     /// Encode the request and return the probe's feature vector.
-    fn features(&self, request: &RouteRequest) -> Result<Vec<f32>, EncoderError> {
+    /// The probe's input features for a request, plus timing: time waiting for the
+    /// encoder, time encoding, and the number of prompt tokens encoded.
+    fn features(&self, request: &RouteRequest) -> Result<(Vec<f32>, RouterTiming), EncoderError> {
         let spec = self.inner.probe.spec();
+        let waited = Instant::now();
         let mut encoder = self.inner.encoder.lock().unwrap_or_else(|p| p.into_inner());
+        let queue_ms = waited.elapsed().as_secs_f64() * 1e3;
+        let encoding = Instant::now();
         let acts = encoder.encode_request(request)?;
+        let timing = RouterTiming {
+            queue_ms: Some(queue_ms),
+            encode_ms: Some(encoding.elapsed().as_secs_f64() * 1e3),
+            encoded_tokens: Some(acts.n_tokens as u64),
+            ..RouterTiming::default()
+        };
         let k = acts
             .layers
             .iter()
             .position(|&l| l == spec.layer)
             .expect("encoder captures the probe layer");
-        Ok(match spec.pooling {
+        let features = match spec.pooling {
             Pooling::Last => acts.last[k].clone(),
             Pooling::Mean => acts.mean[k].clone(),
-        })
+        };
+        Ok((features, timing))
     }
 
     /// Predict, score and rank candidates for a request, best first (blocking; runs the
@@ -192,6 +207,15 @@ impl ProbeRouter {
         request: &RouteRequest,
         candidates: &[Candidate],
     ) -> Result<Vec<Estimate>, RouteError> {
+        self.estimate_timed(request, candidates).map(|(e, _)| e)
+    }
+
+    /// [`estimate_blocking`](Self::estimate_blocking), plus where the time went.
+    pub fn estimate_timed(
+        &self,
+        request: &RouteRequest,
+        candidates: &[Candidate],
+    ) -> Result<(Vec<Estimate>, RouterTiming), RouteError> {
         let probe = &self.inner.probe;
         let usable: Vec<(&Candidate, Tier)> = candidates
             .iter()
@@ -211,9 +235,10 @@ impl ProbeRouter {
                 ))
             });
         }
-        let features = self
+        let (features, mut timing) = self
             .features(request)
             .map_err(|e| RouteError::Failed(e.to_string()))?;
+        let predicting = Instant::now();
         let prompt_tokens = request.estimated_tokens();
         let mut estimates: Vec<Estimate> = usable
             .into_iter()
@@ -230,7 +255,8 @@ impl ProbeRouter {
             })
             .collect();
         opas::scoring::score(&mut estimates, self.weights_for(request));
-        Ok(estimates)
+        timing.predict_ms = Some(predicting.elapsed().as_secs_f64() * 1e3);
+        Ok((estimates, timing))
     }
 }
 
@@ -250,24 +276,39 @@ impl Router for ProbeRouter {
         let request = request.clone();
         let candidates = candidates.to_vec();
         // The prefill takes 100+ ms of GPU work; keep it off the async executor.
-        let estimates =
-            tokio::task::spawn_blocking(move || this.estimate_blocking(&request, &candidates))
+        let started = Instant::now();
+        let (estimates, mut timing) =
+            tokio::task::spawn_blocking(move || this.estimate_timed(&request, &candidates))
                 .await
                 .map_err(|e| RouteError::Failed(format!("encoder task failed: {e}")))??;
+        timing.total_ms = started.elapsed().as_secs_f64() * 1e3;
 
         let best = &estimates[0];
         let reason = format!(
             "best weighted score {:.3} ({weights}): p={:.2}, cost ${:.4}, {:.1}s",
             best.score, best.p_success, best.expected_cost_usd, best.expected_response_time_s
         );
+        let decision_id = uuid::Uuid::new_v4().to_string();
+        let ms = |v: Option<f64>| v.map_or(-1.0, |v| (v * 1000.0).round() / 1000.0);
+        tracing::info!(
+            %decision_id,
+            model = %best.model,
+            prediction_ms = ms(Some(timing.total_ms)),
+            encode_ms = ms(timing.encode_ms),
+            predict_ms = ms(timing.predict_ms),
+            queue_ms = ms(timing.queue_ms),
+            encoded_tokens = timing.encoded_tokens.unwrap_or(0),
+            "predicted"
+        );
         Ok(Decision {
-            decision_id: uuid::Uuid::new_v4().to_string(),
+            decision_id,
             router: "probe".into(),
             model: best.model.clone(),
             reason,
             conversation: None,
             estimates,
             weights: Some(weights),
+            timing: Some(timing),
         })
     }
 }

@@ -41,6 +41,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/decisions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A recent routing decision, with its predicted and actual outcome
+         * @description Look up a proxied request's decision by the `x-opas-decision-id` response header: every candidate's prediction, how long the decision took, and, once the response has finished, the measured outcome (tokens, cost, time to first byte, total time, output speed). Kept in memory for the most recent 10,000 routed requests.
+         */
+        get: operations["decision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/messages": {
         parameters: {
             query?: never;
@@ -165,6 +185,42 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description The measured outcome of a forwarded request. */
+        Actual: {
+            /**
+             * @description Whether the whole response was delivered (false if the client disconnected or
+             *     the upstream stream failed).
+             */
+            complete: boolean;
+            /**
+             * Format: double
+             * @description Cost of `usage` at the model's prices, in USD.
+             */
+            cost_usd?: number | null;
+            /**
+             * Format: double
+             * @description Output tokens per second while streaming (after the first byte); only for
+             *     streamed responses with usage.
+             */
+            output_tokens_per_sec?: number | null;
+            /**
+             * Format: int32
+             * @description The provider's HTTP status.
+             */
+            status: number;
+            /**
+             * Format: double
+             * @description From sending the request upstream to the first byte of the response body. For
+             *     streamed responses, close to time to first token.
+             */
+            time_to_first_byte_s: number;
+            /**
+             * Format: double
+             * @description From sending the request upstream to the end of the response.
+             */
+            total_time_s: number;
+            usage?: components["schemas"]["Usage"] | null;
+        };
         AnthropicModel: {
             created_at: string;
             display_name: string;
@@ -207,6 +263,33 @@ export interface components {
             cached_tokens: number;
             /** @description Model that served the previous turn. */
             previous_model: string;
+        };
+        /**
+         * @description One routing decision: the prediction for every candidate and, once known, the
+         *     measured outcome of the chosen one.
+         */
+        DecisionRecord: {
+            actual?: components["schemas"]["Actual"] | null;
+            api: components["schemas"]["ApiFormat"];
+            /** @description Every candidate's prediction and scores, best first. */
+            candidates: components["schemas"]["Estimate"][];
+            conversation?: components["schemas"]["Conversation"] | null;
+            /**
+             * Format: int64
+             * @description When the decision was made, in milliseconds since the Unix epoch.
+             */
+            created_at_ms: number;
+            decision_id: string;
+            /** @description The chosen model. */
+            model: string;
+            predicted?: components["schemas"]["Estimate"] | null;
+            reason: string;
+            /** @description `probe`, or `affinity` for provider-stored state. */
+            router: string;
+            timing?: components["schemas"]["RouterTiming"] | null;
+            /** @description The provider's name for the chosen model. */
+            upstream_model?: string | null;
+            weights?: components["schemas"]["Weights"] | null;
         };
         ErrorDetail: {
             message: string;
@@ -379,9 +462,38 @@ export interface components {
              *     provider-stored state that lives on one model.
              */
             router: string;
+            timing?: components["schemas"]["RouterTiming"] | null;
             /** @description The provider's name for the chosen model, when it is a configured model. */
             upstream_model?: string | null;
             weights?: components["schemas"]["Weights"] | null;
+        };
+        /** @description Where the time of a routing decision went, in milliseconds. */
+        RouterTiming: {
+            /**
+             * Format: double
+             * @description The encoder's pass over the prompt: computing the activations.
+             */
+            encode_ms?: number | null;
+            /**
+             * Format: int64
+             * @description Prompt tokens the encoder read (after truncation).
+             */
+            encoded_tokens?: number | null;
+            /**
+             * Format: double
+             * @description The predictor heads and the scoring of every candidate.
+             */
+            predict_ms?: number | null;
+            /**
+             * Format: double
+             * @description Waiting for the encoder, which runs one request at a time.
+             */
+            queue_ms?: number | null;
+            /**
+             * Format: double
+             * @description The whole decision, as the gateway measured it.
+             */
+            total_ms: number;
         };
         /** @description How fast a model answers, for response-time estimates. */
         Speed: {
@@ -401,6 +513,29 @@ export interface components {
          * @enum {string}
          */
         Tier: "small" | "medium" | "large" | "xlarge";
+        /** @description Token counts for one request, normalized across APIs. */
+        Usage: {
+            /**
+             * Format: int64
+             * @description Prompt tokens written to the prompt cache (Anthropic reports these separately).
+             */
+            cache_write_tokens: number;
+            /**
+             * Format: int64
+             * @description Prompt tokens read from the prompt cache.
+             */
+            cached_prompt_tokens: number;
+            /**
+             * Format: int64
+             * @description Output tokens, including reasoning / thinking tokens.
+             */
+            output_tokens: number;
+            /**
+             * Format: int64
+             * @description All prompt tokens, including those read from or written to the prompt cache.
+             */
+            prompt_tokens: number;
+        };
         /** @description Relative importance of quality, speed and cost. Only the ratios matter. */
         Weights: {
             /** Format: double */
@@ -466,16 +601,28 @@ export interface operations {
             /** @description The provider's response, unchanged (JSON, or `text/event-stream` when streaming) */
             200: {
                 headers: {
-                    /** @description Routed requests: the decision's id */
+                    /** @description Routed requests: every candidate's prediction, best first: `model; p_success=…; cost_usd=…; response_time_s=…, model; …` */
+                    "x-opas-candidates"?: string;
+                    /** @description Routed requests: the chosen model's expected cost of this request, in USD */
+                    "x-opas-cost-usd"?: string;
+                    /** @description Routed requests: the decision's id; `GET /v1/decisions/{id}` returns the prediction and, after the response, the measured outcome */
                     "x-opas-decision-id"?: string;
-                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` */
+                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` in one value (also in the separate headers) */
                     "x-opas-estimate"?: string;
                     /** @description The configured model that served the request */
                     "x-opas-model"?: string;
+                    /** @description Routed requests: the chosen model's expected output tokens (including reasoning) */
+                    "x-opas-output-tokens"?: string;
+                    /** @description Routed requests: the chosen model's predicted probability of success (0–1) */
+                    "x-opas-p-success"?: string;
                     /** @description Continued conversations: the model that served the previous turn */
                     "x-opas-previous-model"?: string;
+                    /** @description Routed requests: the chosen model's expected time to the complete response, in seconds */
+                    "x-opas-response-time-s"?: string;
                     /** @description Routed requests: the router that decided (`probe` or `affinity`) */
                     "x-opas-router"?: string;
+                    /** @description Routed requests: how long the decision took (encoder and predictor), in milliseconds */
+                    "x-opas-routing-ms"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -508,6 +655,38 @@ export interface operations {
             };
         };
     };
+    decision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The decision id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The decision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionRecord"];
+                };
+            };
+            /** @description Unknown or evicted */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     messages: {
         parameters: {
             query?: never;
@@ -534,16 +713,28 @@ export interface operations {
             /** @description The provider's response, unchanged (JSON, or `text/event-stream` when streaming) */
             200: {
                 headers: {
-                    /** @description Routed requests: the decision's id */
+                    /** @description Routed requests: every candidate's prediction, best first: `model; p_success=…; cost_usd=…; response_time_s=…, model; …` */
+                    "x-opas-candidates"?: string;
+                    /** @description Routed requests: the chosen model's expected cost of this request, in USD */
+                    "x-opas-cost-usd"?: string;
+                    /** @description Routed requests: the decision's id; `GET /v1/decisions/{id}` returns the prediction and, after the response, the measured outcome */
                     "x-opas-decision-id"?: string;
-                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` */
+                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` in one value (also in the separate headers) */
                     "x-opas-estimate"?: string;
                     /** @description The configured model that served the request */
                     "x-opas-model"?: string;
+                    /** @description Routed requests: the chosen model's expected output tokens (including reasoning) */
+                    "x-opas-output-tokens"?: string;
+                    /** @description Routed requests: the chosen model's predicted probability of success (0–1) */
+                    "x-opas-p-success"?: string;
                     /** @description Continued conversations: the model that served the previous turn */
                     "x-opas-previous-model"?: string;
+                    /** @description Routed requests: the chosen model's expected time to the complete response, in seconds */
+                    "x-opas-response-time-s"?: string;
                     /** @description Routed requests: the router that decided (`probe` or `affinity`) */
                     "x-opas-router"?: string;
+                    /** @description Routed requests: how long the decision took (encoder and predictor), in milliseconds */
+                    "x-opas-routing-ms"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -645,16 +836,28 @@ export interface operations {
             /** @description The provider's response, unchanged (JSON, or `text/event-stream` when streaming) */
             200: {
                 headers: {
-                    /** @description Routed requests: the decision's id */
+                    /** @description Routed requests: every candidate's prediction, best first: `model; p_success=…; cost_usd=…; response_time_s=…, model; …` */
+                    "x-opas-candidates"?: string;
+                    /** @description Routed requests: the chosen model's expected cost of this request, in USD */
+                    "x-opas-cost-usd"?: string;
+                    /** @description Routed requests: the decision's id; `GET /v1/decisions/{id}` returns the prediction and, after the response, the measured outcome */
                     "x-opas-decision-id"?: string;
-                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` */
+                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` in one value (also in the separate headers) */
                     "x-opas-estimate"?: string;
                     /** @description The configured model that served the request */
                     "x-opas-model"?: string;
+                    /** @description Routed requests: the chosen model's expected output tokens (including reasoning) */
+                    "x-opas-output-tokens"?: string;
+                    /** @description Routed requests: the chosen model's predicted probability of success (0–1) */
+                    "x-opas-p-success"?: string;
                     /** @description Continued conversations: the model that served the previous turn */
                     "x-opas-previous-model"?: string;
+                    /** @description Routed requests: the chosen model's expected time to the complete response, in seconds */
+                    "x-opas-response-time-s"?: string;
                     /** @description Routed requests: the router that decided (`probe` or `affinity`) */
                     "x-opas-router"?: string;
+                    /** @description Routed requests: how long the decision took (encoder and predictor), in milliseconds */
+                    "x-opas-routing-ms"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -755,16 +958,28 @@ export interface operations {
             /** @description The provider's response, unchanged (JSON, or `text/event-stream` when streaming) */
             200: {
                 headers: {
-                    /** @description Routed requests: the decision's id */
+                    /** @description Routed requests: every candidate's prediction, best first: `model; p_success=…; cost_usd=…; response_time_s=…, model; …` */
+                    "x-opas-candidates"?: string;
+                    /** @description Routed requests: the chosen model's expected cost of this request, in USD */
+                    "x-opas-cost-usd"?: string;
+                    /** @description Routed requests: the decision's id; `GET /v1/decisions/{id}` returns the prediction and, after the response, the measured outcome */
                     "x-opas-decision-id"?: string;
-                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` */
+                    /** @description Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` in one value (also in the separate headers) */
                     "x-opas-estimate"?: string;
                     /** @description The configured model that served the request */
                     "x-opas-model"?: string;
+                    /** @description Routed requests: the chosen model's expected output tokens (including reasoning) */
+                    "x-opas-output-tokens"?: string;
+                    /** @description Routed requests: the chosen model's predicted probability of success (0–1) */
+                    "x-opas-p-success"?: string;
                     /** @description Continued conversations: the model that served the previous turn */
                     "x-opas-previous-model"?: string;
+                    /** @description Routed requests: the chosen model's expected time to the complete response, in seconds */
+                    "x-opas-response-time-s"?: string;
                     /** @description Routed requests: the router that decided (`probe` or `affinity`) */
                     "x-opas-router"?: string;
+                    /** @description Routed requests: how long the decision took (encoder and predictor), in milliseconds */
+                    "x-opas-routing-ms"?: string;
                     [name: string]: unknown;
                 };
                 content: {

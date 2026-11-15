@@ -39,6 +39,16 @@ pub const HEADER_ESTIMATE: &str = "x-opas-estimate";
 /// Response header: model that served the previous turn of this conversation, present
 /// when cache-aware routing recognized the request as a continuation.
 pub const HEADER_PREVIOUS_MODEL: &str = "x-opas-previous-model";
+/// Response headers with the chosen model's prediction, one value each.
+pub const HEADER_P_SUCCESS: &str = "x-opas-p-success";
+pub const HEADER_COST_USD: &str = "x-opas-cost-usd";
+pub const HEADER_RESPONSE_TIME_S: &str = "x-opas-response-time-s";
+pub const HEADER_OUTPUT_TOKENS: &str = "x-opas-output-tokens";
+/// Response header: every candidate's prediction, best first:
+/// `model; p_success=…; cost_usd=…; response_time_s=…, model; …`.
+pub const HEADER_CANDIDATES: &str = "x-opas-candidates";
+/// Response header: how long the routing decision took, in milliseconds.
+pub const HEADER_ROUTING_MS: &str = "x-opas-routing-ms";
 
 /// Request bodies can carry long contexts and images.
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -57,6 +67,7 @@ pub fn app(gateway: Arc<Gateway>) -> axum::Router {
         .route("/v1/route", post(route_only))
         .route("/v1/models", get(models))
         .route("/v1/pricing", get(pricing))
+        .route("/v1/decisions/{id}", get(decision))
         .route("/healthz", get(|| async { "ok" }))
         .route("/openapi.json", get(openapi_json))
         .route("/openapi.yaml", get(openapi_yaml))
@@ -113,6 +124,7 @@ async fn proxy(gw: Arc<Gateway>, format: ApiFormat, headers: &HeaderMap, body: &
     match &forwarded.decision {
         Some(d) => tracing::info!(
             %format, router = %d.router, model = %d.model, decision_id = %d.decision_id,
+            routing_ms = d.timing.map_or(-1.0, |t| (t.total_ms * 10.0).round() / 10.0),
             status = status.as_u16(), "routed"
         ),
         None => {
@@ -132,15 +144,37 @@ async fn proxy(gw: Arc<Gateway>, format: ApiFormat, headers: &HeaderMap, body: &
         insert_header(out, HEADER_DECISION_ID, &d.decision_id);
         insert_header(out, HEADER_ROUTER, &d.router);
         if let Some(e) = d.estimates.iter().find(|e| e.model == d.model) {
+            insert_header(out, HEADER_ESTIMATE, &estimate_fields(e));
+            insert_header(out, HEADER_P_SUCCESS, &format!("{:.3}", e.p_success));
+            insert_header(out, HEADER_COST_USD, &format!("{:.6}", e.expected_cost_usd));
             insert_header(
                 out,
-                HEADER_ESTIMATE,
-                &format!(
-                    "p_success={:.3}; cost_usd={:.6}; response_time_s={:.2}",
-                    e.p_success, e.expected_cost_usd, e.expected_response_time_s
-                ),
+                HEADER_RESPONSE_TIME_S,
+                &format!("{:.2}", e.expected_response_time_s),
+            );
+            insert_header(
+                out,
+                HEADER_OUTPUT_TOKENS,
+                &format!("{:.0}", e.expected_output_tokens),
             );
         }
+        if !d.estimates.is_empty() {
+            let all: Vec<String> = d
+                .estimates
+                .iter()
+                .map(|e| format!("{}; {}", e.model, estimate_fields(e)))
+                .collect();
+            insert_header(out, HEADER_CANDIDATES, &all.join(", "));
+        }
+        if let Some(t) = d.timing {
+            insert_header(out, HEADER_ROUTING_MS, &format!("{:.1}", t.total_ms));
+        }
+        let upstream_model = gw
+            .config()
+            .model(&d.model)
+            .map(|m| m.upstream_model().to_owned());
+        gw.decisions()
+            .insert(opas::DecisionRecord::new(d, format, upstream_model));
     }
     if let Some(c) = &forwarded.conversation {
         insert_header(out, HEADER_PREVIOUS_MODEL, &c.previous_model);
@@ -153,6 +187,7 @@ async fn proxy(gw: Arc<Gateway>, format: ApiFormat, headers: &HeaderMap, body: &
         // references it is pinned to the model that holds the state.
         let mut sniffer = IdSniffer::default();
         let model = forwarded.model.clone();
+        let gw = Arc::clone(&gw);
         stream = stream
             .inspect(move |chunk| {
                 if let Ok(bytes) = chunk {
@@ -164,9 +199,168 @@ async fn proxy(gw: Arc<Gateway>, format: ApiFormat, headers: &HeaderMap, body: &
             })
             .boxed();
     }
+    // Routed requests: measure what actually happened (tokens, cost, time) as the body
+    // streams past, and attach it to the decision record when it ends.
+    if let Some(d) = &forwarded.decision {
+        let content_type = out
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let meter = Meter {
+            gw: Arc::clone(&gw),
+            decision_id: d.decision_id.clone(),
+            model: forwarded.model.clone(),
+            predicted: d.estimates.iter().find(|e| e.model == d.model).cloned(),
+            pricing: gw.price_for(&forwarded.model, headers),
+            status: status.as_u16(),
+            sent_at: forwarded.sent_at,
+            first_byte: None,
+            scanner: Some(opas::UsageScanner::new(format, content_type.as_deref())),
+        };
+        stream = MeteredStream {
+            inner: stream,
+            meter: Some(meter),
+        }
+        .boxed();
+    }
     response
         .body(Body::from_stream(stream))
         .unwrap_or_else(|e| error_response(format, ErrorKind::BadGateway, &e.to_string()))
+}
+
+fn estimate_fields(e: &opas::Estimate) -> String {
+    format!(
+        "p_success={:.3}; cost_usd={:.6}; response_time_s={:.2}",
+        e.p_success, e.expected_cost_usd, e.expected_response_time_s
+    )
+}
+
+/// Passes a response body through while measuring it; records the outcome when the
+/// stream ends or is dropped (client disconnect).
+struct MeteredStream<S> {
+    inner: S,
+    meter: Option<Meter>,
+}
+
+struct Meter {
+    gw: Arc<Gateway>,
+    decision_id: String,
+    model: String,
+    predicted: Option<opas::Estimate>,
+    pricing: Option<opas::Pricing>,
+    status: u16,
+    sent_at: std::time::Instant,
+    first_byte: Option<std::time::Instant>,
+    scanner: Option<opas::UsageScanner>,
+}
+
+impl Meter {
+    fn feed(&mut self, bytes: &[u8]) {
+        if self.first_byte.is_none() && !bytes.is_empty() {
+            self.first_byte = Some(std::time::Instant::now());
+        }
+        if let Some(s) = &mut self.scanner {
+            s.feed(bytes);
+        }
+    }
+
+    fn finish(mut self, complete: bool) {
+        let end = std::time::Instant::now();
+        let usage = self.scanner.take().and_then(opas::UsageScanner::finish);
+        let first = self.first_byte.unwrap_or(end);
+        let ttfb = first.duration_since(self.sent_at).as_secs_f64();
+        let total = end.duration_since(self.sent_at).as_secs_f64();
+        let cost_usd = usage.zip(self.pricing).map(|(u, p)| u.cost_usd(&p));
+        let streaming_s = end.duration_since(first).as_secs_f64();
+        let output_tokens_per_sec = usage
+            .filter(|u| u.output_tokens > 0 && streaming_s > 0.05)
+            .map(|u| u.output_tokens as f64 / streaming_s);
+        let round = |v: f64, d: i32| (v * 10f64.powi(d)).round() / 10f64.powi(d);
+        tracing::info!(
+            decision_id = %self.decision_id,
+            model = %self.model,
+            status = self.status,
+            complete,
+            output_tokens = usage.map_or(-1, |u| u.output_tokens as i64),
+            cost_usd = cost_usd.map_or(-1.0, |c| round(c, 6)),
+            predicted_cost_usd = self.predicted.as_ref().map_or(-1.0, |e| round(e.expected_cost_usd, 6)),
+            total_time_s = round(total, 2),
+            predicted_time_s = self.predicted.as_ref().map_or(-1.0, |e| round(e.expected_response_time_s, 2)),
+            time_to_first_byte_s = round(ttfb, 2),
+            "completed"
+        );
+        self.gw.decisions().complete(
+            &self.decision_id,
+            opas::Actual {
+                status: self.status,
+                complete,
+                usage,
+                cost_usd,
+                time_to_first_byte_s: ttfb,
+                total_time_s: total,
+                output_tokens_per_sec,
+            },
+        );
+    }
+}
+
+impl<S, E> futures_util::Stream for MeteredStream<S>
+where
+    S: futures_util::Stream<Item = Result<Bytes, E>> + Unpin,
+{
+    type Item = Result<Bytes, E>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let polled = std::pin::Pin::new(&mut self.inner).poll_next(cx);
+        match &polled {
+            std::task::Poll::Ready(Some(Ok(bytes))) => {
+                if let Some(m) = &mut self.meter {
+                    m.feed(bytes);
+                }
+            }
+            std::task::Poll::Ready(Some(Err(_))) => {
+                if let Some(m) = self.meter.take() {
+                    m.finish(false);
+                }
+            }
+            std::task::Poll::Ready(None) => {
+                if let Some(m) = self.meter.take() {
+                    m.finish(true);
+                }
+            }
+            std::task::Poll::Pending => {}
+        }
+        polled
+    }
+}
+
+impl<S> Drop for MeteredStream<S> {
+    fn drop(&mut self) {
+        if let Some(m) = self.meter.take() {
+            m.finish(false);
+        }
+    }
+}
+
+/// A recent routing decision with its predicted and measured outcome.
+async fn decision(
+    State(gw): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    match gw.decisions().get(&id) {
+        Some(r) => Json(r).into_response(),
+        None => error_response(
+            ApiFormat::OpenaiChat,
+            ErrorKind::NotFound,
+            &format!(
+                "no decision `{id}` (unknown, or older than the most recent {})",
+                opas::DecisionLog::DEFAULT_CAPACITY
+            ),
+        ),
+    }
 }
 
 /// Finds the first `"id": "..."` value in a response body (JSON or SSE). The response
@@ -278,6 +472,7 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
                 conversation: d.conversation,
                 weights: d.weights,
                 estimates: d.estimates,
+                timing: d.timing,
             })
             .into_response()
         }

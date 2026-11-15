@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use opas::catalog::PriceSource;
 use opas::gateway::ResolvedPrice;
 use opas::{
-    ApiFormat, Candidate, Conversation, Estimate, LongContextPricing, Preference, Pricing, Speed,
-    Tier, Weights,
+    Actual, ApiFormat, Candidate, Conversation, DecisionRecord, Estimate, LongContextPricing,
+    Preference, Pricing, RouterTiming, Speed, Tier, Usage, Weights,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -66,6 +66,8 @@ pub struct RouteResponse {
     pub weights: Option<Weights>,
     /// Every candidate's predictions and scores, best first.
     pub estimates: Vec<Estimate>,
+    /// How long the decision took: encoder (activations) and predictor time.
+    pub timing: Option<RouterTiming>,
 }
 
 /// Body of `GET /v1/pricing`.
@@ -155,6 +157,19 @@ pub struct ErrorDetail {
 fn route() {}
 
 #[utoipa::path(
+    get, path = "/v1/decisions/{id}", tag = "routing",
+    summary = "A recent routing decision, with its predicted and actual outcome",
+    description = "Look up a proxied request's decision by the `x-opas-decision-id` response header: every candidate's prediction, how long the decision took, and, once the response has finished, the measured outcome (tokens, cost, time to first byte, total time, output speed). Kept in memory for the most recent 10,000 routed requests.",
+    params(("id" = String, Path, description = "The decision id")),
+    responses(
+        (status = 200, description = "The decision", body = DecisionRecord),
+        (status = 404, description = "Unknown or evicted", body = ErrorResponse),
+    )
+)]
+#[allow(dead_code)]
+fn decision() {}
+
+#[utoipa::path(
     get, path = "/v1/pricing", tag = "routing",
     summary = "Prices in effect for the configured models",
     description = "Each configured model's price (USD per million tokens) and where it came from: the config, models.dev, or the tier's default. Per-request prices (`x-opas-pricing`) are not included.",
@@ -205,8 +220,14 @@ macro_rules! proxy_path {
                     headers(
                         ("x-opas-model" = String, description = "The configured model that served the request"),
                         ("x-opas-router" = String, description = "Routed requests: the router that decided (`probe` or `affinity`)"),
-                        ("x-opas-decision-id" = String, description = "Routed requests: the decision's id"),
-                        ("x-opas-estimate" = String, description = "Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s`"),
+                        ("x-opas-decision-id" = String, description = "Routed requests: the decision's id; `GET /v1/decisions/{id}` returns the prediction and, after the response, the measured outcome"),
+                        ("x-opas-p-success" = String, description = "Routed requests: the chosen model's predicted probability of success (0–1)"),
+                        ("x-opas-cost-usd" = String, description = "Routed requests: the chosen model's expected cost of this request, in USD"),
+                        ("x-opas-response-time-s" = String, description = "Routed requests: the chosen model's expected time to the complete response, in seconds"),
+                        ("x-opas-output-tokens" = String, description = "Routed requests: the chosen model's expected output tokens (including reasoning)"),
+                        ("x-opas-candidates" = String, description = "Routed requests: every candidate's prediction, best first: `model; p_success=…; cost_usd=…; response_time_s=…, model; …`"),
+                        ("x-opas-routing-ms" = String, description = "Routed requests: how long the decision took (encoder and predictor), in milliseconds"),
+                        ("x-opas-estimate" = String, description = "Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s` in one value (also in the separate headers)"),
                         ("x-opas-previous-model" = String, description = "Continued conversations: the model that served the previous turn"),
                     )),
                 (status = 400, description = "Invalid request, or the router model was requested without a router"),
@@ -251,12 +272,12 @@ proxy_path!(
         description = "A model router for LLM requests. opas predicts each candidate model's success probability, cost and response time from an open-weight model's activations, and picks one by the quality / speed / cost weights the client sets. It serves four provider APIs as a routing proxy, plus a decision-only endpoint.",
         license(name = "MIT", identifier = "MIT"),
     ),
-    paths(route, pricing, models, healthz, chat_completions, messages, responses, interactions),
+    paths(route, decision, pricing, models, healthz, chat_completions, messages, responses, interactions),
     components(schemas(
         RouteBody, RouteResponse, PricingResponse, ModelsDevStatus, OpenAiModelList, OpenAiModel,
         AnthropicModelList, AnthropicModel, ErrorResponse, ErrorDetail, ApiFormat, Candidate,
         Tier, Pricing, LongContextPricing, Speed, Weights, Preference, Estimate, Conversation,
-        ResolvedPrice, PriceSource,
+        ResolvedPrice, PriceSource, DecisionRecord, Actual, Usage, RouterTiming,
     )),
     modifiers(&LocalServer),
     tags(

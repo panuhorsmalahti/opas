@@ -157,9 +157,53 @@ wins:
 |---|---|---|
 | `x-opas-model` | always | Configured model id that served the request |
 | `x-opas-router` | routed requests | `probe`, or `affinity` (pinned by stored provider state) |
-| `x-opas-decision-id` | routed requests | Unique id of the decision, for logs and outcome feedback |
-| `x-opas-estimate` | routed requests (probe router) | The chosen model's `p_success`, `cost_usd` and `response_time_s` |
+| `x-opas-decision-id` | routed requests | Id of the decision: look up its outcome with `GET /v1/decisions/{id}` |
+| `x-opas-p-success` | routed requests (probe router) | The chosen model's predicted probability of success, 0–1 |
+| `x-opas-cost-usd` | routed requests (probe router) | The chosen model's expected cost of this request, USD |
+| `x-opas-response-time-s` | routed requests (probe router) | The chosen model's expected time to the complete response, seconds |
+| `x-opas-output-tokens` | routed requests (probe router) | The chosen model's expected output tokens, including reasoning |
+| `x-opas-candidates` | routed requests (probe router) | Every candidate, best first: `model; p_success=…; cost_usd=…; response_time_s=…, model; …` |
+| `x-opas-routing-ms` | routed requests | How long the decision took (encoder + predictor), milliseconds |
+| `x-opas-estimate` | routed requests (probe router) | The chosen model's three predictions in one value (kept for compatibility) |
 | `x-opas-previous-model` | continued conversations | Model that served the previous turn (cache-aware routing recognized the conversation) |
+
+Requests that name a model directly are not routed and carry only `x-opas-model`.
+
+## Predicted and actual: `GET /v1/decisions/{id}`
+
+Headers are sent before the response body, so they can only carry predictions. Once a
+routed response has finished, opas has measured what actually happened, and
+`GET /v1/decisions/{id}` returns both:
+
+```sh
+curl localhost:8080/v1/decisions/308a366b-0fe1-41b8-82c1-1b5b823f9202
+```
+
+```json
+{
+  "model": "claude-haiku-5-5",
+  "predicted": {"p_success": 0.83, "expected_cost_usd": 0.00125, "expected_response_time_s": 14.7, "expected_output_tokens": 2502, "...": "..."},
+  "candidates": [{"model": "claude-haiku-5-5", "...": "..."}, {"model": "claude-opus-5-5", "...": "..."}],
+  "timing": {"total_ms": 172.4, "queue_ms": 0.0, "encode_ms": 172.3, "predict_ms": 0.02, "encoded_tokens": 26},
+  "actual": {
+    "status": 200, "complete": true,
+    "usage": {"prompt_tokens": 2040, "cached_prompt_tokens": 2000, "cache_write_tokens": 0, "output_tokens": 350},
+    "cost_usd": 0.000199,
+    "time_to_first_byte_s": 0.31, "total_time_s": 2.4, "output_tokens_per_sec": 155.2
+  }
+}
+```
+
+- `actual` is `null` while the response is still streaming, and `complete: false` if
+  the client disconnected first.
+- **Cost** is the provider-reported token usage at the model's prices (the same prices
+  as the estimate; cache writes at the input price). `usage` is `null` when the
+  provider reported none, e.g. OpenAI Chat streams without
+  `stream_options.include_usage`.
+- **Time** is measured from sending the request upstream, so it excludes routing
+  (`timing`). `output_tokens_per_sec` is set for streamed responses.
+- The most recent 10,000 decisions are kept in memory; the log line `completed` has the
+  same numbers next to the prediction.
 
 ## Multi-turn conversations and caching
 

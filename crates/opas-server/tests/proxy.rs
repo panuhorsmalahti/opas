@@ -40,6 +40,7 @@ async fn spawn_upstream(calls: Arc<AtomicUsize>) -> String {
         Json(json!({
             "id": id,
             "model": body["model"],
+            "usage": {"input_tokens": 1000, "output_tokens": 500},
             "x_goog_api_key": h("x-goog-api-key"),
             "authorization": h("authorization"),
             "x_api_key": h("x-api-key"),
@@ -118,6 +119,7 @@ impl Router for FixedPredictions {
             conversation: None,
             weights: Some(weights),
             estimates,
+            timing: None,
         })
     }
 }
@@ -151,6 +153,7 @@ impl Router for RoundRobin {
             conversation: None,
             weights: None,
             estimates: Vec::new(),
+            timing: None,
         })
     }
 }
@@ -1009,4 +1012,125 @@ async fn openapi_spec_is_served_and_matches_the_responses() {
     let (status, _, body) = send(&h.app, Request::get("/docs").body(Body::empty()).unwrap()).await;
     assert_eq!(status, StatusCode::OK);
     assert!(String::from_utf8_lossy(&body).contains("openapi.json"));
+}
+
+#[tokio::test]
+async fn routed_responses_carry_predictions_and_decisions_record_the_actual_outcome() {
+    let h = harness_with(Some(Arc::new(FixedPredictions))).await;
+    let (status, headers, _) = send(
+        &h.app,
+        req(
+            "/v1/messages",
+            json!({"model": "auto", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]}),
+            &[("x-opas-preference", "quality")],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-opas-model"], "big");
+    assert_eq!(headers["x-opas-p-success"], "0.880");
+    let cost: f64 = headers["x-opas-cost-usd"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(cost > 0.0);
+    assert!(
+        headers["x-opas-response-time-s"]
+            .to_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap()
+            > 0.0
+    );
+    assert_eq!(headers["x-opas-output-tokens"], "800");
+    let candidates = headers["x-opas-candidates"].to_str().unwrap();
+    assert!(
+        candidates.starts_with("big; p_success=0.880; cost_usd=")
+            && candidates.contains(", small; p_success=0.450;"),
+        "{candidates}"
+    );
+    assert!(
+        headers["x-opas-routing-ms"]
+            .to_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap()
+            >= 0.0
+    );
+
+    // The decision record has the prediction and, after the body, the measured outcome.
+    let id = headers["x-opas-decision-id"].to_str().unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        Request::get(format!("/v1/decisions/{id}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let record = json_body(&body);
+    assert_eq!(record["model"], "big");
+    assert_eq!(record["upstream_model"], "big-upstream");
+    assert_eq!(record["predicted"]["p_success"], 0.88);
+    assert_eq!(record["candidates"].as_array().unwrap().len(), 2);
+    assert!(record["timing"]["total_ms"].as_f64().unwrap() >= 0.0);
+    let actual = &record["actual"];
+    assert_eq!(actual["status"], 200);
+    assert_eq!(actual["complete"], true);
+    assert_eq!(actual["usage"]["prompt_tokens"], 1000);
+    assert_eq!(actual["usage"]["output_tokens"], 500);
+    // big is tier large with default prices: $4 in / $20 out per million tokens.
+    let cost = actual["cost_usd"].as_f64().unwrap();
+    assert!(
+        (cost - (1000.0 * 4.0 + 500.0 * 20.0) / 1e6).abs() < 1e-9,
+        "{cost}"
+    );
+    assert!(
+        actual["total_time_s"].as_f64().unwrap()
+            >= actual["time_to_first_byte_s"].as_f64().unwrap()
+    );
+
+    // Streams without usage still complete; unknown ids are 404.
+    let (_, headers, _) = send(
+        &h.app,
+        req(
+            "/v1/chat/completions",
+            json!({"model": "auto", "stream": true, "messages": [{"role": "user", "content": "hi"}]}),
+            &[],
+        ),
+    )
+    .await;
+    let id = headers["x-opas-decision-id"].to_str().unwrap();
+    let (_, _, body) = send(
+        &h.app,
+        Request::get(format!("/v1/decisions/{id}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let record = json_body(&body);
+    assert_eq!(record["actual"]["complete"], true);
+    assert!(record["actual"]["usage"].is_null());
+    let (status, _, _) = send(
+        &h.app,
+        Request::get("/v1/decisions/nope")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Direct requests are not routed and have no decision.
+    let (_, headers, _) = send(
+        &h.app,
+        req(
+            "/v1/messages",
+            json!({"model": "small", "max_tokens": 5, "messages": []}),
+            &[],
+        ),
+    )
+    .await;
+    assert!(!headers.contains_key("x-opas-decision-id"));
+    assert!(!headers.contains_key("x-opas-p-success"));
 }
