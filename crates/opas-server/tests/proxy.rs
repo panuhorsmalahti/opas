@@ -1277,3 +1277,40 @@ async fn codex_threads_stay_on_their_model_and_foreign_reasoning_is_dropped() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json_body(&body)["reasoning_items_received"], 0);
 }
+
+#[tokio::test]
+async fn root_shows_status_as_json_or_html() {
+    let h = harness().await;
+    let (status, _, body) = send(&h.app, Request::get("/").body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    let info = json_body(&body);
+    assert_eq!(info["name"], "opas");
+    assert_eq!(info["router"], "round-robin");
+    assert_eq!(info["router_model"], "auto");
+    assert_eq!(info["proxy"], true);
+    let ids: Vec<_> = info["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].clone())
+        .collect();
+    assert_eq!(ids, [json!("big"), json!("small"), json!("openai-only")]);
+    assert_eq!(info["models"][0]["upstream_model"], "big-upstream");
+    assert_eq!(info["models"][2]["apis"], json!(["openai_chat"]));
+
+    let (status, headers, body) = send(
+        &h.app,
+        Request::get("/")
+            .header("accept", "text/html,application/xhtml+xml")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
+    let page = String::from_utf8(body.to_vec()).unwrap();
+    assert!(page.contains("<code>big-upstream</code>") && page.contains("href=\"/docs\""));
+}

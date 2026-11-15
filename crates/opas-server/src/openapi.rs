@@ -194,6 +194,15 @@ fn pricing() {}
 fn models() {}
 
 #[utoipa::path(
+    get, path = "/", tag = "server",
+    summary = "What this server is and how it is set up",
+    description = "Version, router, whether the proxy is on, and the configured models with their tiers, APIs and prices. An HTML page when the request accepts `text/html` (a browser), JSON otherwise.",
+    responses((status = 200, description = "Server status (JSON, or HTML for browsers)", body = Object))
+)]
+#[allow(dead_code)]
+fn status() {}
+
+#[utoipa::path(
     get, path = "/healthz", tag = "server",
     summary = "Liveness check",
     responses((status = 200, description = "The server is up", body = String, content_type = "text/plain", example = "ok"))
@@ -277,7 +286,7 @@ proxy_path!(
         description = "A model router for LLM requests. opas predicts each candidate model's success probability, cost and response time from an open-weight model's activations, and picks one by the quality / speed / cost weights the client sets. It serves four provider APIs as a routing proxy, plus a decision-only endpoint.",
         license(name = "MIT", identifier = "MIT"),
     ),
-    paths(route, decision, pricing, models, healthz, chat_completions, messages, responses, interactions),
+    paths(status, route, decision, pricing, models, healthz, chat_completions, messages, responses, interactions),
     components(schemas(
         RouteBody, RouteResponse, PricingResponse, ModelsDevStatus, OpenAiModelList, OpenAiModel,
         AnthropicModelList, AnthropicModel, ErrorResponse, ErrorDetail, ApiFormat, Candidate,

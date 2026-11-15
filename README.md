@@ -195,6 +195,7 @@ curl localhost:8080/v1/messages -H 'content-type: application/json' -d '{
 | `GET /v1/pricing` | Resolved price per model and its source |
 | `GET /v1/models`, `GET /healthz` | Model list, liveness |
 | `GET /openapi.json`, `GET /openapi.yaml`, `GET /docs` | OpenAPI 3.1 document, and a browsable reference |
+| `GET /` | Status page: version, router, proxy, models and prices (HTML in a browser, JSON otherwise) |
 
 **Routed vs direct:** send `"model": "auto"` to be routed, or a configured model id to go
 direct.

@@ -15,6 +15,28 @@
     }
   ],
   "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "What this server is and how it is set up",
+        "description": "Version, router, whether the proxy is on, and the configured models with their tiers, APIs and prices. An HTML page when the request accepts `text/html` (a browser), JSON otherwise.",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "Server status (JSON, or HTML for browsers)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [

@@ -68,6 +68,7 @@ pub fn app(gateway: Arc<Gateway>) -> axum::Router {
         .route("/v1/models", get(models))
         .route("/v1/pricing", get(pricing))
         .route("/v1/decisions/{id}", get(decision))
+        .route("/", get(status))
         .route("/healthz", get(|| async { "ok" }))
         .route("/openapi.json", get(openapi_json))
         .route("/openapi.yaml", get(openapi_yaml))
@@ -417,6 +418,127 @@ fn find_id(buf: &[u8]) -> Option<String> {
         rest = &rest[pos + 4..];
     }
     None
+}
+
+/// What this server is and how it is set up: an HTML page for browsers, JSON otherwise.
+async fn status(State(gw): State<AppState>, headers: HeaderMap) -> Response {
+    let config = gw.config();
+    let prices = gw.price_table();
+    let models: Vec<Value> = config
+        .models
+        .iter()
+        .map(|m| {
+            let price = prices.iter().find(|p| p.model == m.id);
+            json!({
+                "id": m.id,
+                "tier": m.tier,
+                "upstream_model": m.upstream_model(),
+                "apis": ApiFormat::ALL
+                    .iter()
+                    .filter(|f| m.upstream(**f).is_some())
+                    .map(|f| f.as_str())
+                    .collect::<Vec<_>>(),
+                "pricing": price.and_then(|p| p.pricing),
+                "price_source": price.map(|p| p.source),
+            })
+        })
+        .collect();
+    let info = json!({
+        "name": "opas",
+        "version": env!("CARGO_PKG_VERSION"),
+        "router": gw.router().map(|r| r.name()),
+        "router_model": gw.router().map(|_| config.router_model.as_str()),
+        "proxy": config.proxy.enabled,
+        "cache_aware": config.cache.enabled,
+        "decisions_recorded": gw.decisions().len(),
+        "models": models,
+        "links": {
+            "docs": "/docs", "openapi": "/openapi.json", "health": "/healthz",
+            "models": "/v1/models", "pricing": "/v1/pricing", "route": "/v1/route",
+        },
+    });
+    let wants_html = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|a| a.contains("text/html"));
+    if !wants_html {
+        return Json(info).into_response();
+    }
+
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let mut rows = String::new();
+    for m in &config.models {
+        let price = prices.iter().find(|p| p.model == m.id);
+        let pricing = price.and_then(|p| p.pricing).map_or_else(
+            || "—".to_owned(),
+            |p| format!("${} / ${} / ${}", p.input, p.cached_input, p.output),
+        );
+        let apis: Vec<&str> = ApiFormat::ALL
+            .iter()
+            .filter(|f| m.upstream(**f).is_some())
+            .map(|f| f.as_str())
+            .collect();
+        rows.push_str(&format!(
+            "<tr><td><code>{}</code></td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td></tr>",
+            esc(&m.id),
+            m.tier.map_or("—", |t| t.as_str()),
+            esc(m.upstream_model()),
+            esc(&apis.join(", ")),
+            esc(&pricing),
+        ));
+    }
+    let router = match gw.router() {
+        Some(r) => format!(
+            "<b>{}</b> — send <code>\"model\": \"{}\"</code> to be routed",
+            esc(r.name()),
+            esc(&config.router_model)
+        ),
+        None => "none — a plain proxy: requests name a model".to_owned(),
+    };
+    let proxy = if config.proxy.enabled {
+        "on: <code>/v1/chat/completions</code>, <code>/v1/messages</code>, <code>/v1/responses</code>, <code>/v1beta/interactions</code>"
+    } else {
+        "off: decisions only (<code>POST /v1/route</code>)"
+    };
+    let page = format!(
+        r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>opas</title>
+<style>
+:root {{ color-scheme: light dark; --fg: #1d1d1f; --muted: #6e6e73; --bg: #fff; --line: #e5e5ea; --accent: #5b5bd6; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --fg: #f2f2f7; --muted: #a1a1aa; --bg: #111114; --line: #2a2a31; --accent: #8b8bff; }} }}
+body {{ font: 15px/1.5 system-ui, -apple-system, sans-serif; color: var(--fg); background: var(--bg); max-width: 900px; margin: 0 auto; padding: 32px 16px; }}
+h1 {{ margin: 0; font-size: 28px; }} .sub {{ color: var(--muted); margin: 4px 0 24px; }}
+dl {{ display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 24px; }} dt {{ color: var(--muted); }} dd {{ margin: 0; }}
+table {{ border-collapse: collapse; width: 100%; font-size: 14px; }} th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }}
+th {{ color: var(--muted); font-weight: 600; }} code {{ font-size: 13px; }} a {{ color: var(--accent); }}
+.links a {{ margin-right: 16px; }} .wrap {{ overflow-x: auto; }}
+</style></head><body>
+<h1>opas <span style="font-weight:400;color:var(--muted)">{version}</span></h1>
+<p class="sub">A model router for LLM requests. This server is running.</p>
+<dl>
+<dt>Router</dt><dd>{router}</dd>
+<dt>Proxy</dt><dd>{proxy}</dd>
+<dt>Cache-aware</dt><dd>{cache}</dd>
+<dt>Decisions</dt><dd>{decisions} recorded (look one up at <code>/v1/decisions/&lt;id&gt;</code>)</dd>
+</dl>
+<div class="wrap"><table>
+<tr><th>Model</th><th>Tier</th><th>Upstream name</th><th>APIs</th><th>Price per M tokens (in / cached / out)</th></tr>
+{rows}
+</table></div>
+<p class="links"><a href="/docs">API reference</a><a href="/v1/pricing">Prices</a><a href="/v1/models">Models</a><a href="/openapi.json">OpenAPI</a><a href="/healthz">Health</a></p>
+</body></html>
+"#,
+        version = env!("CARGO_PKG_VERSION"),
+        cache = if config.cache.enabled { "yes" } else { "no" },
+        decisions = gw.decisions().len(),
+    );
+    axum::response::Html(page).into_response()
 }
 
 /// The OpenAPI document, built once.
