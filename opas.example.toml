@@ -24,6 +24,12 @@ models_dev = true
 # refresh_hours = 24
 # cache_file = "models-dev.json"   # last good copy, for starting offline
 
+# Decision-only mode: serve POST /v1/route (and /v1/decisions, /v1/pricing, /v1/models)
+# but not the proxy endpoints. Clients call the chosen model themselves; models need no
+# upstream URLs and opas needs no provider keys.
+# [proxy]
+# enabled = false
+
 [cache]
 ttl_secs = 300                 # how long provider prompt caches stay warm
 # state_ttl_secs = 604800      # how long stored response ids (Responses / Interactions) pin a model

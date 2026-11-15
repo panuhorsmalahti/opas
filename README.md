@@ -94,6 +94,24 @@ time to first token), set from Anthropic's models measured in November 2026:
 | large | 90 tokens/s | 1.4 s |
 | xlarge | 80 tokens/s | 1.5 s |
 
+**These speeds are estimates.** They are rough figures from a handful of requests, and
+real speed varies with provider, load, effort level, Fast mode and prompt length. They
+only feed the response-time estimate (and so the speed weight), but the closer they are
+to your traffic, the better the trade-off. Operators should set measured values per
+model in the config:
+
+```toml
+[[models]]
+id = "claude-opus-5-5"
+tier = "large"
+speed = { output_tokens_per_sec = 110, ttft_s = 1.3 }   # what you observe
+```
+
+`GET /v1/decisions/{id}` and the `completed` log line report each response's actual
+time to first byte, total time and output tokens per second, which is a good source
+for these values. Prices work the same way: set `pricing` per model to override
+models.dev and the tier defaults.
+
 ## Quick start
 
 ```sh
@@ -252,13 +270,24 @@ weights = { quality = 60, speed = 20, cost = 20 }  # default balance; requests c
 [cache]
 ttl_secs = 300                                      # provider prompt-cache lifetime
 
+# [proxy]
+# enabled = false   # decision-only: serve /v1/route, not the proxy endpoints
+
 [[models]]
 id = "claude-haiku-5-5"
 tier = "small"
-pricing = { input = 0.10, cached_input = 0.01, output = 0.50 }
+pricing = { input = 0.10, cached_input = 0.01, output = 0.50 }   # optional: else models.dev
+speed = { output_tokens_per_sec = 225, ttft_s = 1.0 }             # optional: else tier default
 anthropic = { base_url = "https://api.anthropic.com/v1", api_key_env = "ANTHROPIC_API_KEY" }
 # also: openai = {...}, responses = {...}, interactions = {...}
 ```
+
+**Decision-only mode.** With `[proxy] enabled = false`, opas never contacts a provider:
+the four proxy endpoints answer 404 (in each API's error format), and clients ask
+`POST /v1/route` which model to use, then call it themselves. Models then need no
+upstream URLs (`id`, `tier` and optionally `pricing` and `speed` are enough), no
+provider keys are needed, and `/v1/decisions/{id}` keeps the predictions (without
+measured outcomes, since nothing is forwarded).
 
 ## Deployment
 

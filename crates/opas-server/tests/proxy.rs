@@ -1134,3 +1134,100 @@ async fn routed_responses_carry_predictions_and_decisions_record_the_actual_outc
     assert!(!headers.contains_key("x-opas-decision-id"));
     assert!(!headers.contains_key("x-opas-p-success"));
 }
+
+#[tokio::test]
+async fn decision_only_mode_serves_route_and_refuses_to_proxy() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let config = Config::from_toml_str(
+        r#"
+        [proxy]
+        enabled = false
+        [router]
+        kind = "probe"
+        encoder_model = "unused.gguf"
+        probe = "unused.json"
+        [[models]]
+        id = "big"
+        tier = "large"
+        speed = { output_tokens_per_sec = 1000, ttft_s = 0.1 }
+        [[models]]
+        id = "small"
+        tier = "small"
+        "#,
+    )
+    .unwrap();
+    let gateway = Arc::new(Gateway::with_router(config, Arc::new(FixedPredictions)));
+    let app = opas_server::app(Arc::clone(&gateway));
+
+    // Proxy endpoints answer 404 in their own error shapes.
+    let (status, _, body) = send(
+        &app,
+        req(
+            "/v1/messages",
+            json!({"model": "auto", "max_tokens": 5, "messages": []}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let body = json_body(&body);
+    assert_eq!(body["type"], "error");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("/v1/route"));
+    let (status, _, body) = send(
+        &app,
+        req(
+            "/v1/chat/completions",
+            json!({"model": "big", "messages": []}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(json_body(&body)["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("decisions"));
+
+    // Decisions work, with models that have no upstream, in any API format.
+    let (status, _, body) = send(
+        &app,
+        req(
+            "/v1/route",
+            json!({"api": "gemini_interactions", "request": {"model": "auto", "input": "hi"}}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let decision = json_body(&body);
+    let big = decision["estimates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["model"] == "big")
+        .unwrap()
+        .clone();
+    // The configured speed is used: 0.1 s + 800 tokens / 1000 tok/s.
+    assert!(
+        (big["expected_response_time_s"].as_f64().unwrap() - 0.9).abs() < 1e-9,
+        "{big}"
+    );
+
+    // ...and are recorded, without an outcome (nothing was forwarded).
+    let id = decision["decision_id"].as_str().unwrap();
+    let (status, _, body) = send(
+        &app,
+        Request::get(format!("/v1/decisions/{id}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let record = json_body(&body);
+    assert_eq!(record["api"], "gemini_interactions");
+    assert!(record["actual"].is_null());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}

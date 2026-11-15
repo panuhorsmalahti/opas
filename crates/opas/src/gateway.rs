@@ -294,6 +294,12 @@ impl Gateway {
     fn price_candidates(&self, candidates: &mut [Candidate], overrides: &HashMap<String, Pricing>) {
         let catalog = self.catalog();
         for c in candidates.iter_mut() {
+            // A caller-supplied candidate that names a configured model inherits its tier
+            // and speed unless it sets its own.
+            if let Some(m) = self.config.model(&c.id) {
+                c.tier = c.tier.or(m.tier);
+                c.speed = c.speed.or(m.speed);
+            }
             if let Some(p) = overrides.get(&c.id) {
                 c.pricing = Some(*p);
                 continue;

@@ -231,7 +231,7 @@ macro_rules! proxy_path {
                         ("x-opas-previous-model" = String, description = "Continued conversations: the model that served the previous turn"),
                     )),
                 (status = 400, description = "Invalid request, or the router model was requested without a router"),
-                (status = 404, description = "Unknown model"),
+                (status = 404, description = "Unknown model, or the proxy is disabled on this server (`[proxy] enabled = false`; use `/v1/route`)"),
                 (status = 502, description = "The provider could not be reached"),
             )
         )]

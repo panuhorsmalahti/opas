@@ -104,6 +104,14 @@ async fn gemini_interactions(
 }
 
 async fn proxy(gw: Arc<Gateway>, format: ApiFormat, headers: &HeaderMap, body: &[u8]) -> Response {
+    if !gw.config().proxy.enabled {
+        return error_response(
+            format,
+            ErrorKind::NotFound,
+            "this opas server only makes routing decisions ([proxy] enabled = false): \
+             POST the request to /v1/route, then call the chosen model yourself",
+        );
+    }
     let json: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => {
@@ -461,7 +469,14 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
                 .config()
                 .model(&d.model)
                 .map(|m| m.upstream_model().to_owned());
-            tracing::info!(api = %parsed.api, router = %d.router, model = %d.model, decision_id = %d.decision_id, "decided");
+            tracing::info!(api = %parsed.api, router = %d.router, model = %d.model, decision_id = %d.decision_id,
+                routing_ms = d.timing.map_or(-1.0, |t| (t.total_ms * 10.0).round() / 10.0), "decided");
+            // Recorded for GET /v1/decisions/{id}; nothing is forwarded, so no outcome.
+            gw.decisions().insert(opas::DecisionRecord::new(
+                &d,
+                parsed.api,
+                upstream_model.clone(),
+            ));
             Json(openapi::RouteResponse {
                 decision_id: d.decision_id,
                 router: d.router,

@@ -639,7 +639,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Unknown model */
+            /** @description Unknown model, or the proxy is disabled on this server (`[proxy] enabled = false`; use `/v1/route`) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -751,7 +751,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Unknown model */
+            /** @description Unknown model, or the proxy is disabled on this server (`[proxy] enabled = false`; use `/v1/route`) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -874,7 +874,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Unknown model */
+            /** @description Unknown model, or the proxy is disabled on this server (`[proxy] enabled = false`; use `/v1/route`) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -996,7 +996,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Unknown model */
+            /** @description Unknown model, or the proxy is disabled on this server (`[proxy] enabled = false`; use `/v1/route`) */
             404: {
                 headers: {
                     [name: string]: unknown;

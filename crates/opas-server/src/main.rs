@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.listen = listen;
     }
 
-    for model in &config.models {
+    for model in config.models.iter().filter(|_| config.proxy.enabled) {
         let mut vars: Vec<&str> = [
             &model.openai,
             &model.anthropic,
@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         router = gateway.router().map_or("none (plain proxy)", |r| r.name()),
         router_model = %gateway.config().router_model,
         cache_aware = gateway.config().cache.enabled,
+        proxy = gateway.config().proxy.enabled,
         models = ?gateway.config().models.iter().map(|m| &m.id).collect::<Vec<_>>(),
         "starting"
     );

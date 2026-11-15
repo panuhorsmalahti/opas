@@ -218,6 +218,9 @@ lifetimes). It is kept in memory in each server process.
 
 ## Decision only: `POST /v1/route`
 
+Operators who want only this endpoint can turn the proxy off with `[proxy] enabled =
+false`: the proxy endpoints then answer 404 and models need no upstream URLs or keys.
+
 Asks the router which model to use, without forwarding anything. Use it when your
 application calls the providers itself.
 

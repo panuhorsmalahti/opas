@@ -27,7 +27,27 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub pricing: PricingConfig,
+    #[serde(default)]
+    pub proxy: ProxyConfig,
     pub models: Vec<ModelConfig>,
+}
+
+/// Whether opas forwards requests to providers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyConfig {
+    /// Serve the proxy endpoints (`/v1/chat/completions`, `/v1/messages`,
+    /// `/v1/responses`, `/v1beta/interactions`). With `false`, opas only makes decisions
+    /// (`/v1/route`): clients call the providers themselves, and models need no
+    /// upstream URLs.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Where model prices come from (besides per-model `pricing` and per-request prices).
@@ -266,12 +286,18 @@ impl Config {
                     m.id
                 )));
             }
-            if ApiFormat::ALL.iter().all(|f| m.upstream(*f).is_none()) {
+            if self.proxy.enabled && ApiFormat::ALL.iter().all(|f| m.upstream(*f).is_none()) {
                 return Err(ConfigError::Invalid(format!(
                     "model `{}` needs at least one upstream (`openai`, `anthropic`, `responses` or `interactions`)",
                     m.id
                 )));
             }
+        }
+        if !self.proxy.enabled && self.router.is_none() {
+            return Err(ConfigError::Invalid(
+                "[proxy] enabled = false needs a [router]: without both, there is nothing to serve"
+                    .into(),
+            ));
         }
         Ok(())
     }
@@ -281,14 +307,17 @@ impl Config {
     }
 
     /// Models that can serve requests in `format`, in config order.
+    /// With the proxy disabled, every model is a candidate for every format (the client
+    /// calls the provider itself).
     pub fn candidates(&self, format: ApiFormat) -> Vec<Candidate> {
         self.models
             .iter()
-            .filter(|m| m.upstream(format).is_some())
+            .filter(|m| !self.proxy.enabled || m.upstream(format).is_some())
             .map(|m| {
                 Candidate::new(&m.id)
                     .with_tier(m.tier)
                     .with_pricing(m.pricing)
+                    .with_speed(m.speed)
             })
             .collect()
     }
@@ -297,6 +326,42 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decision_only_mode_needs_a_router_but_no_upstreams() {
+        let ok = Config::from_toml_str(
+            r#"
+            [proxy]
+            enabled = false
+            [router]
+            kind = "probe"
+            encoder_model = "m.gguf"
+            probe = "p.json"
+            [[models]]
+            id = "fast"
+            tier = "small"
+            speed = { output_tokens_per_sec = 300, ttft_s = 0.3 }
+            [[models]]
+            id = "smart"
+            tier = "large"
+            "#,
+        )
+        .unwrap();
+        assert!(!ok.proxy.enabled);
+        // Without upstreams, every model is a candidate in every format, and the
+        // configured speed is passed on.
+        let c = ok.candidates(ApiFormat::GeminiInteractions);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].speed.unwrap().output_tokens_per_sec, 300.0);
+
+        let err = Config::from_toml_str(
+            "[proxy]\nenabled = false\n[[models]]\nid = \"a\"\ntier = \"small\"\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("needs a [router]"), "{err}");
+        // With the proxy on (default), models still need an upstream.
+        assert!(Config::from_toml_str("[[models]]\nid = \"a\"\n").is_err());
+    }
 
     const EXAMPLE: &str = r#"
         router_model = "auto"

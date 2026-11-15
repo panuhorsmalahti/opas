@@ -65,7 +65,9 @@ pub mod usage;
 
 pub use api::ApiFormat;
 pub use catalog::{PriceCatalog, PriceSource};
-pub use config::{CacheConfig, Config, ConfigError, ModelConfig, RouterConfig, Upstream};
+pub use config::{
+    CacheConfig, Config, ConfigError, ModelConfig, ProxyConfig, RouterConfig, Upstream,
+};
 pub use conversation::{Conversation, ConversationTracker, LongContextPricing, Pricing, Speed};
 pub use decisions::{Actual, DecisionLog, DecisionRecord};
 pub use request::{Message, RequestError, RouteRequest};
