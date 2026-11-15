@@ -26,6 +26,7 @@ pub const COST_RANGE: f64 = 100.0;
 pub const TIME_RANGE: f64 = 10.0;
 
 /// Relative importance of quality, speed and cost. Only the ratios matter.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Weights {
@@ -111,6 +112,7 @@ impl std::str::FromStr for Weights {
 }
 
 /// Named weight presets.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Preference {
@@ -152,6 +154,7 @@ impl std::str::FromStr for Preference {
 }
 
 /// A router's prediction for one candidate model, with its scores.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Estimate {
     /// Candidate model id.

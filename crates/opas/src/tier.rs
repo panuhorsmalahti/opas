@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::conversation::{Pricing, Speed};
 
 /// Capability band of a model.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {

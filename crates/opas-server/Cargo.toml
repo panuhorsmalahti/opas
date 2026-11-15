@@ -21,7 +21,7 @@ vulkan = ["probe", "opas-encoder/vulkan"]
 rocm = ["probe", "opas-encoder/rocm"]
 
 [dependencies]
-opas = { path = "../opas", features = ["gateway"] }
+opas = { path = "../opas", features = ["gateway", "openapi"] }
 opas-encoder = { path = "../opas-encoder", optional = true }
 axum.workspace = true
 bytes.workspace = true
@@ -32,6 +32,7 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+utoipa = { workspace = true, features = ["yaml"] }
 
 [dev-dependencies]
 async-trait.workspace = true

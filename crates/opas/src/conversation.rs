@@ -31,6 +31,7 @@ use crate::router::Candidate;
 const BYTES_PER_TOKEN: u64 = 4;
 
 /// What is known about the conversation a request continues.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conversation {
     /// Model that served the previous turn.
@@ -41,6 +42,7 @@ pub struct Conversation {
 }
 
 /// Per-model prices in USD per million tokens.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pricing {
@@ -55,6 +57,7 @@ pub struct Pricing {
 }
 
 /// Prices for prompts longer than `above_tokens`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LongContextPricing {
@@ -92,6 +95,7 @@ impl Pricing {
 }
 
 /// How fast a model answers, for response-time estimates.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Speed {

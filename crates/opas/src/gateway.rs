@@ -59,6 +59,7 @@ impl RequestOptions {
 }
 
 /// A model's resolved price and where it came from.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ResolvedPrice {
     pub model: String,

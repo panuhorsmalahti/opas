@@ -1,0 +1,1299 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "opas",
+    "description": "A model router for LLM requests. opas predicts each candidate model's success probability, cost and response time from an open-weight model's activations, and picks one by the quality / speed / cost weights the client sets. It serves four provider APIs as a routing proxy, plus a decision-only endpoint.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.2"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8080"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Liveness check",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "The server is up",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "ok"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "OpenAI Chat Completions, routed",
+        "description": "Send a request body exactly as the provider's API expects it (https://platform.openai.com/docs/api-reference/chat). With `model` set to the router model (`auto`), opas picks a model; with a configured model id, the request goes straight to that model. opas rewrites `model` to the provider's name, forwards the request, and streams the response back unchanged, adding the `x-opas-*` headers. Without a server-side key for the model, the client's own credentials are forwarded.",
+        "operationId": "chat_completions",
+        "parameters": [
+          {
+            "name": "x-opas-weights",
+            "in": "header",
+            "description": "Quality / speed / cost weights for this request, e.g. `quality=60,speed=20,cost=20`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-preference",
+            "in": "header",
+            "description": "A preset instead of weights: `quality`, `balanced`, `cost` or `speed`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-pricing",
+            "in": "header",
+            "description": "Prices for this request, USD per million tokens: `model=input/cached/output; other=input/output`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A request body in the provider's format",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider's response, unchanged (JSON, or `text/event-stream` when streaming)",
+            "headers": {
+              "x-opas-decision-id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the decision's id"
+              },
+              "x-opas-estimate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s`"
+              },
+              "x-opas-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The configured model that served the request"
+              },
+              "x-opas-previous-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Continued conversations: the model that served the previous turn"
+              },
+              "x-opas-router": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the router that decided (`probe` or `affinity`)"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or the router model was requested without a router"
+          },
+          "404": {
+            "description": "Unknown model"
+          },
+          "502": {
+            "description": "The provider could not be reached"
+          }
+        }
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Anthropic Messages, routed",
+        "description": "Send a request body exactly as the provider's API expects it (https://docs.anthropic.com/en/api/messages). With `model` set to the router model (`auto`), opas picks a model; with a configured model id, the request goes straight to that model. opas rewrites `model` to the provider's name, forwards the request, and streams the response back unchanged, adding the `x-opas-*` headers. Without a server-side key for the model, the client's own credentials are forwarded.",
+        "operationId": "messages",
+        "parameters": [
+          {
+            "name": "x-opas-weights",
+            "in": "header",
+            "description": "Quality / speed / cost weights for this request, e.g. `quality=60,speed=20,cost=20`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-preference",
+            "in": "header",
+            "description": "A preset instead of weights: `quality`, `balanced`, `cost` or `speed`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-pricing",
+            "in": "header",
+            "description": "Prices for this request, USD per million tokens: `model=input/cached/output; other=input/output`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A request body in the provider's format",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider's response, unchanged (JSON, or `text/event-stream` when streaming)",
+            "headers": {
+              "x-opas-decision-id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the decision's id"
+              },
+              "x-opas-estimate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s`"
+              },
+              "x-opas-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The configured model that served the request"
+              },
+              "x-opas-previous-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Continued conversations: the model that served the previous turn"
+              },
+              "x-opas-router": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the router that decided (`probe` or `affinity`)"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or the router model was requested without a router"
+          },
+          "404": {
+            "description": "Unknown model"
+          },
+          "502": {
+            "description": "The provider could not be reached"
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "List the router model and the configured models",
+        "description": "The router model (`auto` by default, only when a router is configured) followed by the configured models. Anthropic-shaped when the request carries `anthropic-version`, OpenAI-shaped otherwise.",
+        "operationId": "models",
+        "parameters": [
+          {
+            "name": "anthropic-version",
+            "in": "header",
+            "description": "Any value selects the Anthropic response shape",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model list (OpenAI shape; `AnthropicModelList` with `anthropic-version`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiModelList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pricing": {
+      "get": {
+        "tags": [
+          "routing"
+        ],
+        "summary": "Prices in effect for the configured models",
+        "description": "Each configured model's price (USD per million tokens) and where it came from: the config, models.dev, or the tier's default. Per-request prices (`x-opas-pricing`) are not included.",
+        "operationId": "pricing",
+        "responses": {
+          "200": {
+            "description": "Resolved prices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/responses": {
+      "post": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Open Responses, routed",
+        "description": "Send a request body exactly as the provider's API expects it (https://www.openresponses.org). With `model` set to the router model (`auto`), opas picks a model; with a configured model id, the request goes straight to that model. opas rewrites `model` to the provider's name, forwards the request, and streams the response back unchanged, adding the `x-opas-*` headers. Without a server-side key for the model, the client's own credentials are forwarded.",
+        "operationId": "responses",
+        "parameters": [
+          {
+            "name": "x-opas-weights",
+            "in": "header",
+            "description": "Quality / speed / cost weights for this request, e.g. `quality=60,speed=20,cost=20`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-preference",
+            "in": "header",
+            "description": "A preset instead of weights: `quality`, `balanced`, `cost` or `speed`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-pricing",
+            "in": "header",
+            "description": "Prices for this request, USD per million tokens: `model=input/cached/output; other=input/output`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A request body in the provider's format",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider's response, unchanged (JSON, or `text/event-stream` when streaming)",
+            "headers": {
+              "x-opas-decision-id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the decision's id"
+              },
+              "x-opas-estimate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s`"
+              },
+              "x-opas-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The configured model that served the request"
+              },
+              "x-opas-previous-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Continued conversations: the model that served the previous turn"
+              },
+              "x-opas-router": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the router that decided (`probe` or `affinity`)"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or the router model was requested without a router"
+          },
+          "404": {
+            "description": "Unknown model"
+          },
+          "502": {
+            "description": "The provider could not be reached"
+          }
+        }
+      }
+    },
+    "/v1/route": {
+      "post": {
+        "tags": [
+          "routing"
+        ],
+        "summary": "Decide which model a request should go to, without sending it",
+        "description": "Runs the router on a request body in any supported API format and returns the chosen model with every candidate's predicted success probability, cost and response time. Nothing is sent upstream.",
+        "operationId": "route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, empty `candidates`, invalid weights, or no router configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A named model is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1beta/interactions": {
+      "post": {
+        "tags": [
+          "proxy"
+        ],
+        "summary": "Gemini Interactions, routed (also served at /v1/interactions)",
+        "description": "Send a request body exactly as the provider's API expects it (https://ai.google.dev/api/interactions). With `model` set to the router model (`auto`), opas picks a model; with a configured model id, the request goes straight to that model. opas rewrites `model` to the provider's name, forwards the request, and streams the response back unchanged, adding the `x-opas-*` headers. Without a server-side key for the model, the client's own credentials are forwarded.",
+        "operationId": "interactions",
+        "parameters": [
+          {
+            "name": "x-opas-weights",
+            "in": "header",
+            "description": "Quality / speed / cost weights for this request, e.g. `quality=60,speed=20,cost=20`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-preference",
+            "in": "header",
+            "description": "A preset instead of weights: `quality`, `balanced`, `cost` or `speed`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "x-opas-pricing",
+            "in": "header",
+            "description": "Prices for this request, USD per million tokens: `model=input/cached/output; other=input/output`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A request body in the provider's format",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provider's response, unchanged (JSON, or `text/event-stream` when streaming)",
+            "headers": {
+              "x-opas-decision-id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the decision's id"
+              },
+              "x-opas-estimate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the chosen model's `p_success`, `cost_usd` and `response_time_s`"
+              },
+              "x-opas-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The configured model that served the request"
+              },
+              "x-opas-previous-model": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Continued conversations: the model that served the previous turn"
+              },
+              "x-opas-router": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Routed requests: the router that decided (`probe` or `affinity`)"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or the router model was requested without a router"
+          },
+          "404": {
+            "description": "Unknown model"
+          },
+          "502": {
+            "description": "The provider could not be reached"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AnthropicModel": {
+        "type": "object",
+        "required": [
+          "type",
+          "id",
+          "display_name",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "Always `model`."
+          }
+        }
+      },
+      "AnthropicModelList": {
+        "type": "object",
+        "description": "`GET /v1/models` in the Anthropic shape (when the request has `anthropic-version`).",
+        "required": [
+          "data",
+          "has_more"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnthropicModel"
+            }
+          },
+          "first_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "last_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ApiFormat": {
+        "type": "string",
+        "description": "The wire format of an LLM request.",
+        "enum": [
+          "openai_chat",
+          "anthropic_messages",
+          "open_responses",
+          "gemini_interactions"
+        ]
+      },
+      "Candidate": {
+        "type": "object",
+        "description": "A model the router may choose.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Model id as exposed by the router (matches a configured model id)."
+          },
+          "models_dev": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "models.dev catalog key (`provider/model`) to price this candidate from, when\n`pricing` is not given."
+          },
+          "pricing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Pricing",
+                "description": "Prices, if configured; used for cost estimates and cache-aware routing."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "speed": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Speed",
+                "description": "Serving speed, if configured; used for response-time estimates."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Tier",
+                "description": "Capability tier, if configured; used by routers that predict outcomes per tier."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "description": "What is known about the conversation a request continues.",
+        "required": [
+          "previous_model",
+          "cached_tokens"
+        ],
+        "properties": {
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Estimated prompt tokens likely cached at the previous model's provider: system\nprompt, tools, and the history up to the previous turn.",
+            "minimum": 0
+          },
+          "previous_model": {
+            "type": "string",
+            "description": "Model that served the previous turn."
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "required": [
+          "message",
+          "type"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "e.g. `invalid_request_error`, `not_found_error`, `api_error`."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "Errors from opas itself use the error shape of the API the request was made in.\nThis is the OpenAI shape, used by `/v1/route` and the OpenAI-format endpoints;\nAnthropic-format endpoints wrap it as `{\"type\": \"error\", \"error\": {...}}`, and\nGemini Interactions use `{\"error\": {\"code\", \"message\", \"status\"}}`.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      },
+      "Estimate": {
+        "type": "object",
+        "description": "A router's prediction for one candidate model, with its scores.",
+        "required": [
+          "model",
+          "p_success",
+          "expected_cost_usd",
+          "expected_response_time_s",
+          "expected_output_tokens"
+        ],
+        "properties": {
+          "cached_prompt_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Prompt tokens billed at the cached price (warm prompt cache of the model that\nserved the previous turn).",
+            "minimum": 0
+          },
+          "cost_score": {
+            "type": "number",
+            "format": "double",
+            "description": "Cost score: 1 for the cheapest candidate, 0 at COST_RANGE× pricier."
+          },
+          "expected_cost_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Expected cost of the request on this model, in USD."
+          },
+          "expected_output_tokens": {
+            "type": "number",
+            "format": "double",
+            "description": "Expected output tokens."
+          },
+          "expected_response_time_s": {
+            "type": "number",
+            "format": "double",
+            "description": "Expected time until the complete response, in seconds: time to first token +\noutput tokens / output speed. Per request (one turn), not per multi-call task."
+          },
+          "model": {
+            "type": "string",
+            "description": "Candidate model id."
+          },
+          "p_success": {
+            "type": "number",
+            "format": "double",
+            "description": "Predicted probability that the model answers successfully (0..1)."
+          },
+          "quality_score": {
+            "type": "number",
+            "format": "double",
+            "description": "Quality score: p_success relative to the best candidate (1 for the best)."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Weighted average of the three scores; the router picks the highest."
+          },
+          "speed_score": {
+            "type": "number",
+            "format": "double",
+            "description": "Speed score: 1 for the fastest candidate, 0 at TIME_RANGE× slower."
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Tier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "LongContextPricing": {
+        "type": "object",
+        "description": "Prices for prompts longer than `above_tokens`.",
+        "required": [
+          "above_tokens",
+          "input",
+          "cached_input",
+          "output"
+        ],
+        "properties": {
+          "above_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "cached_input": {
+            "type": "number",
+            "format": "double"
+          },
+          "input": {
+            "type": "number",
+            "format": "double"
+          },
+          "output": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModelsDevStatus": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "priced_models"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether prices are fetched from models.dev."
+          },
+          "priced_models": {
+            "type": "integer",
+            "description": "Number of models in the loaded catalog (0 until the first fetch succeeds).",
+            "minimum": 0
+          }
+        }
+      },
+      "OpenAiModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "owned_by"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `model`."
+          },
+          "owned_by": {
+            "type": "string"
+          }
+        }
+      },
+      "OpenAiModelList": {
+        "type": "object",
+        "description": "`GET /v1/models` in the OpenAI shape (default).",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAiModel"
+            }
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `list`."
+          }
+        }
+      },
+      "Preference": {
+        "type": "string",
+        "description": "Named weight presets.",
+        "enum": [
+          "quality",
+          "balanced",
+          "cost",
+          "speed"
+        ]
+      },
+      "PriceSource": {
+        "type": "string",
+        "description": "Where a resolved price came from.",
+        "enum": [
+          "request",
+          "config",
+          "models_dev",
+          "tier_default",
+          "unknown"
+        ]
+      },
+      "Pricing": {
+        "type": "object",
+        "description": "Per-model prices in USD per million tokens.",
+        "required": [
+          "input",
+          "cached_input",
+          "output"
+        ],
+        "properties": {
+          "cached_input": {
+            "type": "number",
+            "format": "double",
+            "description": "Price of input tokens read from the prompt cache."
+          },
+          "input": {
+            "type": "number",
+            "format": "double"
+          },
+          "long_context": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LongContextPricing",
+                "description": "Higher prices that apply when the prompt exceeds a context size, as some\nproviders charge (e.g. above 100k or 200k tokens)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PricingResponse": {
+        "type": "object",
+        "description": "Body of `GET /v1/pricing`.",
+        "required": [
+          "models_dev",
+          "models"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedPrice"
+            },
+            "description": "The price in effect for each configured model."
+          },
+          "models_dev": {
+            "$ref": "#/components/schemas/ModelsDevStatus"
+          }
+        }
+      },
+      "ResolvedPrice": {
+        "type": "object",
+        "description": "A model's resolved price and where it came from.",
+        "required": [
+          "model",
+          "source"
+        ],
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "models_dev": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pricing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Pricing"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/PriceSource"
+          }
+        }
+      },
+      "RouteBody": {
+        "type": "object",
+        "description": "Body of `POST /v1/route`.",
+        "required": [
+          "api",
+          "request"
+        ],
+        "properties": {
+          "api": {
+            "$ref": "#/components/schemas/ApiFormat",
+            "description": "Format of `request`."
+          },
+          "candidates": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "description": "Models to choose between. Defaults to the configured models that serve `api`."
+          },
+          "preference": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Preference",
+                "description": "A named preset instead of `weights`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pricing": {
+            "type": "object",
+            "description": "Prices by model id for this request (USD per million tokens), overriding the\noperator's and models.dev prices.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Pricing"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "request": {
+            "type": "object",
+            "description": "A request body in that format, exactly as it would be sent to the proxy endpoint.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "weights": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Weights",
+                "description": "Quality / speed / cost weights. Defaults to the router's (60 / 20 / 20)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RouteResponse": {
+        "type": "object",
+        "description": "A routing decision, with every candidate's estimates.",
+        "required": [
+          "decision_id",
+          "router",
+          "model",
+          "reason",
+          "api",
+          "estimates"
+        ],
+        "properties": {
+          "api": {
+            "$ref": "#/components/schemas/ApiFormat"
+          },
+          "conversation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Conversation",
+                "description": "The conversation this request continued, if opas recognized one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decision_id": {
+            "type": "string",
+            "description": "Unique id of the decision, also logged by opas."
+          },
+          "estimates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Estimate"
+            },
+            "description": "Every candidate's predictions and scores, best first."
+          },
+          "model": {
+            "type": "string",
+            "description": "The chosen model (a configured model id, or one of `candidates`)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable explanation."
+          },
+          "router": {
+            "type": "string",
+            "description": "The router that decided: `probe`, or `affinity` when the request continues\nprovider-stored state that lives on one model."
+          },
+          "upstream_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's name for the chosen model, when it is a configured model."
+          },
+          "weights": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Weights",
+                "description": "The weights that were applied."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Speed": {
+        "type": "object",
+        "description": "How fast a model answers, for response-time estimates.",
+        "required": [
+          "output_tokens_per_sec",
+          "ttft_s"
+        ],
+        "properties": {
+          "output_tokens_per_sec": {
+            "type": "number",
+            "format": "double",
+            "description": "Output tokens per second once generation starts."
+          },
+          "ttft_s": {
+            "type": "number",
+            "format": "double",
+            "description": "Time to first token, in seconds."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Tier": {
+        "type": "string",
+        "description": "Capability band of a model.",
+        "enum": [
+          "small",
+          "medium",
+          "large",
+          "xlarge"
+        ]
+      },
+      "Weights": {
+        "type": "object",
+        "description": "Relative importance of quality, speed and cost. Only the ratios matter.",
+        "properties": {
+          "cost": {
+            "type": "number",
+            "format": "double"
+          },
+          "quality": {
+            "type": "number",
+            "format": "double"
+          },
+          "speed": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "routing",
+      "description": "Routing decisions and prices"
+    },
+    {
+      "name": "proxy",
+      "description": "Provider APIs, routed by opas"
+    },
+    {
+      "name": "models",
+      "description": "Model listing"
+    },
+    {
+      "name": "server",
+      "description": "Operations"
+    }
+  ]
+}

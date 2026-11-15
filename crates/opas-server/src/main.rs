@@ -18,6 +18,10 @@ struct Args {
     /// Listen address; overrides `listen` in the config.
     #[arg(short, long, env = "OPAS_LISTEN")]
     listen: Option<String>,
+    /// Print the OpenAPI document (JSON) and exit. The server also serves it at
+    /// /openapi.json.
+    #[arg(long)]
+    openapi: bool,
 }
 
 #[tokio::main]
@@ -29,6 +33,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Args::parse();
+    if args.openapi {
+        println!("{}", opas_server::openapi::spec().to_pretty_json()?);
+        return Ok(());
+    }
     let path = args.config.map_or_else(default_config_path, Ok)?;
     tracing::info!(config = %path.display(), "loading config");
     let mut config = Config::load(&path)?;

@@ -14,7 +14,9 @@ model's provider, streaming responses through unchanged.
 | `POST /v1beta/interactions`, `POST /v1/interactions` | Gemini Interactions API |
 | `POST /v1/route` | Decision only, nothing forwarded; accepts its own `candidates` list (id, tier, pricing) |
 | `GET /v1/models` | Router model and configured models |
+| `GET /v1/pricing` | Resolved price per model and its source |
 | `GET /healthz` | Liveness |
+| `GET /openapi.json`, `/openapi.yaml`, `/docs` | OpenAPI 3.1 document (also `opas --openapi`) and a browsable reference |
 
 **Routed vs direct:** send `"model": "auto"` (the `router_model` setting) to be routed;
 send a configured model id to go direct.

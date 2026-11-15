@@ -11,6 +11,8 @@ rust-version.workspace = true
 default = []
 # HTTP forwarding to upstream providers (used by opas-server, also usable in-process).
 gateway = ["dep:reqwest", "dep:http"]
+# OpenAPI schemas (utoipa) for the public request and response types.
+openapi = ["dep:utoipa"]
 
 [dependencies]
 async-trait.workspace = true
@@ -22,6 +24,7 @@ tracing.workspace = true
 uuid.workspace = true
 http = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true

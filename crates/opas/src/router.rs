@@ -10,6 +10,7 @@ use crate::scoring::{Estimate, Weights};
 use crate::tier::Tier;
 
 /// A model the router may choose.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
     /// Model id as exposed by the router (matches a configured model id).

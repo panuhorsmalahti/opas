@@ -235,6 +235,10 @@ of the decision API too.
 - `GET /v1/models` lists `auto` and the configured models. The response is
   Anthropic-shaped when the request carries `anthropic-version`, OpenAI-shaped otherwise.
 - `GET /healthz` returns `ok`.
+- `GET /openapi.json` and `GET /openapi.yaml` return the OpenAPI 3.1 document for all of
+  the above, and `GET /docs` renders it as a browsable reference (the page loads its
+  viewer from a CDN). The same document is in the repository at
+  [docs/openapi.json](../openapi.json), and `opas --openapi` prints it.
 
 ## Errors
 

@@ -18,6 +18,7 @@ use serde_json::Value;
 use crate::conversation::{LongContextPricing, Pricing};
 
 /// Where a resolved price came from.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PriceSource {

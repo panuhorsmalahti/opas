@@ -925,3 +925,88 @@ async fn without_a_router_opas_is_a_plain_proxy() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(h.upstream_calls.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn openapi_spec_is_served_and_matches_the_responses() {
+    let h = harness_with(Some(Arc::new(FixedPredictions))).await;
+    let (status, _, body) = send(
+        &h.app,
+        Request::get("/openapi.json").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let spec = json_body(&body);
+    assert!(spec["openapi"].as_str().unwrap().starts_with("3.1"));
+    let paths = spec["paths"].as_object().unwrap();
+    for p in [
+        "/v1/route",
+        "/v1/pricing",
+        "/v1/models",
+        "/v1/messages",
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1beta/interactions",
+        "/healthz",
+    ] {
+        assert!(paths.contains_key(p), "{p} missing");
+    }
+
+    // Every $ref resolves to a component schema.
+    let schemas = spec["components"]["schemas"].as_object().unwrap();
+    fn refs(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    if k == "$ref" {
+                        out.push(v.as_str().unwrap().to_owned());
+                    } else {
+                        refs(v, out);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|v| refs(v, out)),
+            _ => {}
+        }
+    }
+    let mut all = Vec::new();
+    refs(&spec, &mut all);
+    for r in &all {
+        let name = r.rsplit('/').next().unwrap();
+        assert!(schemas.contains_key(name), "unresolved {r}");
+    }
+
+    // A real /v1/route response has exactly the documented fields.
+    let (_, _, body) = send(
+        &h.app,
+        req(
+            "/v1/route",
+            json!({"api": "openai_chat", "request": {"model": "auto", "messages": [{"role": "user", "content": "hi"}]}}),
+            &[],
+        ),
+    )
+    .await;
+    let actual: HashSet<String> = json_body(&body)
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    let documented: HashSet<String> = schemas["RouteResponse"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(actual, documented);
+
+    let (status, headers, _) = send(
+        &h.app,
+        Request::get("/openapi.yaml").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "application/yaml");
+    let (status, _, body) = send(&h.app, Request::get("/docs").body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("openapi.json"));
+}

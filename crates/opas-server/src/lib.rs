@@ -13,6 +13,8 @@
 
 use std::sync::Arc;
 
+pub mod openapi;
+
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -21,10 +23,8 @@ use axum::routing::{get, post};
 use axum::Json;
 use futures_util::StreamExt;
 use opas::gateway::{Gateway, GatewayError, RequestOptions};
-use std::collections::HashMap;
 
-use opas::{ApiFormat, Candidate, Preference, Pricing, RouteError, Weights};
-use serde::Deserialize;
+use opas::{ApiFormat, Preference, RouteError};
 use serde_json::{json, Value};
 
 /// Response header: the configured model id that served the request.
@@ -58,6 +58,12 @@ pub fn app(gateway: Arc<Gateway>) -> axum::Router {
         .route("/v1/models", get(models))
         .route("/v1/pricing", get(pricing))
         .route("/healthz", get(|| async { "ok" }))
+        .route("/openapi.json", get(openapi_json))
+        .route("/openapi.yaml", get(openapi_yaml))
+        .route(
+            "/docs",
+            get(|| async { axum::response::Html(openapi::DOCS_HTML) }),
+        )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(gateway)
 }
@@ -211,33 +217,27 @@ fn find_id(buf: &[u8]) -> Option<String> {
     None
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RouteBody {
-    /// Format of `request`.
-    api: ApiFormat,
-    /// A request body in that format.
-    request: Value,
-    /// Models to choose between, e.g. `[{"id": "my-small", "tier": "small"}, ...]`.
-    /// Defaults to the configured models that serve `api`.
-    #[serde(default)]
-    candidates: Option<Vec<Candidate>>,
-    /// Quality / speed / cost weights, e.g. `{"quality": 60, "speed": 20, "cost": 20}`.
-    #[serde(default)]
-    weights: Option<Weights>,
-    /// A named preset instead of `weights`: quality, balanced, cost or speed.
-    #[serde(default)]
-    preference: Option<Preference>,
-    /// Prices by model id for this request (USD per million tokens), overriding the
-    /// operator's and models.dev prices.
-    #[serde(default)]
-    pricing: HashMap<String, Pricing>,
+/// The OpenAPI document, built once.
+fn spec() -> &'static utoipa::openapi::OpenApi {
+    static SPEC: std::sync::OnceLock<utoipa::openapi::OpenApi> = std::sync::OnceLock::new();
+    SPEC.get_or_init(openapi::spec)
+}
+
+async fn openapi_json() -> Response {
+    Json(spec()).into_response()
+}
+
+async fn openapi_yaml() -> Response {
+    match spec().to_yaml() {
+        Ok(y) => ([(header::CONTENT_TYPE, "application/yaml")], y).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// Decide which model a request should go to, without forwarding it.
 async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
     let format = ApiFormat::OpenaiChat; // error shape for this endpoint
-    let parsed: RouteBody = match serde_json::from_slice(&body) {
+    let parsed: openapi::RouteBody = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
             let apis = ApiFormat::ALL.map(ApiFormat::as_str).join(" | ");
@@ -268,17 +268,17 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
                 .model(&d.model)
                 .map(|m| m.upstream_model().to_owned());
             tracing::info!(api = %parsed.api, router = %d.router, model = %d.model, decision_id = %d.decision_id, "decided");
-            Json(json!({
-                "decision_id": d.decision_id,
-                "router": d.router,
-                "model": d.model,
-                "upstream_model": upstream_model,
-                "reason": d.reason,
-                "api": parsed.api,
-                "conversation": d.conversation,
-                "weights": d.weights,
-                "estimates": d.estimates,
-            }))
+            Json(openapi::RouteResponse {
+                decision_id: d.decision_id,
+                router: d.router,
+                model: d.model,
+                upstream_model,
+                reason: d.reason,
+                api: parsed.api,
+                conversation: d.conversation,
+                weights: d.weights,
+                estimates: d.estimates,
+            })
             .into_response()
         }
         Err(e) => gateway_error(format, &e),
@@ -288,10 +288,13 @@ async fn route_only(State(gw): State<AppState>, body: Bytes) -> Response {
 /// Resolved price per configured model and where it came from.
 async fn pricing(State(gw): State<AppState>) -> Response {
     let catalog = gw.catalog();
-    Json(json!({
-        "models_dev": {"enabled": gw.config().pricing.models_dev, "priced_models": catalog.len()},
-        "models": gw.price_table(),
-    }))
+    Json(openapi::PricingResponse {
+        models_dev: openapi::ModelsDevStatus {
+            enabled: gw.config().pricing.models_dev,
+            priced_models: catalog.len(),
+        },
+        models: gw.price_table(),
+    })
     .into_response()
 }
 
